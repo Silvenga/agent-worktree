@@ -173,6 +173,8 @@ post_merge = []
 
 > **`copy_files` 约束** — gitignore 风格 pattern 必须停留在 repo 内：
 > 拒绝 `/` 开头（绝对路径）和 `..` 段，符号链接不跟随。
+> 文件系统支持时（如 BTRFS、ZFS、XFS、APFS、ReFS）复制走写时复制
+> （reflink），否则回退普通拷贝。
 >
 > **Hook 信任边界** — hooks 通过 `sh -c`（Windows `cmd /C`）执行，
 > 无沙箱无超时。把 `.agent-worktree.toml` 当 committed shell script
@@ -190,7 +192,9 @@ post_merge = []
 > | `WT_BRANCH` | worktree 分支名 |
 > | `WT_BASE_BRANCH` | base 分支（`new` 为创建来源，`merge` 为合并目标） |
 >
-> 据此，`post_create` 可软链替代 `copy_files`——只共享、不复制依赖等重目录：
+> 据此，`post_create` 可软链替代 `copy_files`——只共享、不复制依赖等重目录。
+> `copy_files` 在支持写时复制的文件系统上已近零成本，软链技巧主要用于
+> 不支持 CoW 的文件系统：
 >
 > ```toml
 > [hooks]

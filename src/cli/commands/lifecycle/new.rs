@@ -215,8 +215,12 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 /// where the filesystem supports it, falling back to a plain content copy
 /// otherwise.
 fn copy_file_reflink(from: &Path, to: &Path) -> std::io::Result<()> {
-    if to.exists() {
-        std::fs::remove_file(to)?;
+    // Blind-remove instead of checking `to.exists()`: exists() follows
+    // symlinks and reports false for a broken symlink, which would leave the
+    // link in place and make the create_new inside reflink fail.
+    match std::fs::remove_file(to) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        other => other?,
     }
     reflink_copy::reflink_or_copy(from, to).map(|_| ())
 }
@@ -253,5 +257,30 @@ mod tests {
         // Windows-style path separator should still be rejected.
         let err = validate_copy_pattern("..\\secrets").unwrap_err();
         assert!(err.to_string().contains(".."));
+    }
+
+    #[test]
+    fn copy_file_reflink_overwrites_existing_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("dest.txt");
+        std::fs::write(&src, "new").unwrap();
+        std::fs::write(&dest, "stale").unwrap();
+
+        copy_file_reflink(&src, &dest).unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_file_reflink_replaces_broken_symlink_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dest = dir.path().join("dest.txt");
+        std::fs::write(&src, "new").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &dest).unwrap();
+
+        copy_file_reflink(&src, &dest).unwrap();
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
     }
 }
