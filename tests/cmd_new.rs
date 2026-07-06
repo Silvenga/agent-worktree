@@ -301,3 +301,67 @@ copy_files = [".env"]
         "source and copy should match"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn test_new_copy_files_skips_symlink_entries() {
+    let (dir, repo, home) = setup_worktree_test_env();
+
+    // Symlink escaping the repo: must never materialize external content.
+    let outside = dir.path().join("outside-secret.txt");
+    std::fs::write(&outside, "OUTSIDE").unwrap();
+    std::os::unix::fs::symlink(&outside, repo.join(".env")).unwrap();
+
+    // Symlink to a file inside the repo: skipped as well (uniform rule).
+    std::fs::write(repo.join(".env.dev"), "DEV").unwrap();
+    std::os::unix::fs::symlink(repo.join(".env.dev"), repo.join(".env.link")).unwrap();
+
+    std::fs::write(
+        repo.join(".agent-worktree.toml"),
+        r#"
+[general]
+copy_files = [".env", ".env.link", ".env.dev"]
+"#,
+    )
+    .unwrap();
+
+    let path_file = create_path_file(dir.path());
+    let output = Command::new(wt_binary())
+        .args([
+            "new",
+            "symlink-skip-test",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt new failed");
+
+    assert!(
+        output.status.success(),
+        "wt new failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = read_path_file(&path_file);
+    let wt_root = std::path::Path::new(wt_path.trim());
+    assert!(
+        wt_root.join(".env").symlink_metadata().is_err(),
+        "symlink to outside file must not be copied"
+    );
+    assert!(
+        wt_root.join(".env.link").symlink_metadata().is_err(),
+        "symlink to in-repo file must not be copied"
+    );
+    // Regular files still copy as usual.
+    assert_eq!(
+        std::fs::read_to_string(wt_root.join(".env.dev")).unwrap(),
+        "DEV"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("skipping symlink"),
+        "skips should be reported: {stderr}"
+    );
+}

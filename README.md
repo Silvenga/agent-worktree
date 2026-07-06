@@ -177,9 +177,10 @@ post_merge = []
 
 > **`copy_files` constraints** — patterns are gitignore-style and must stay
 > inside the repo: leading `/` (absolute paths) and `..` traversal are
-> rejected. Symlinks are not followed. Files are copied using Reflink 
-> where the filesystem supports it (e.g., BTRFS, ZFS, XFS, APFS, ReFS, etc.),
-> falling back to a plain copy otherwise.
+> rejected. Symlink entries are skipped entirely — neither the link nor its
+> target is copied (share paths via a `post_create` hook instead). Files are
+> copied using Reflink where the filesystem supports it (e.g., BTRFS, ZFS,
+> XFS, APFS, ReFS, etc.), falling back to a plain copy otherwise.
 >
 > **Hook trust boundary** — hooks run via `sh -c` (or `cmd /C` on Windows)
 > with no sandboxing or timeout. Treat `.agent-worktree.toml` like any

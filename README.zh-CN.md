@@ -172,7 +172,8 @@ post_merge = []
 ```
 
 > **`copy_files` 约束** — gitignore 风格 pattern 必须停留在 repo 内：
-> 拒绝 `/` 开头（绝对路径）和 `..` 段，符号链接不跟随。
+> 拒绝 `/` 开头（绝对路径）和 `..` 段。符号链接一律跳过——链接本身与
+> 目标内容均不复制（共享路径请改用 `post_create` hook 软链）。
 > 文件系统支持时（如 BTRFS、ZFS、XFS、APFS、ReFS）复制走写时复制
 > （reflink），否则回退普通拷贝。
 >

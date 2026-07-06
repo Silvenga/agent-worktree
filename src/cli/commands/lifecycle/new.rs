@@ -179,6 +179,16 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 
     for entry in walker.flatten() {
         let path = entry.path();
+        // `path.is_file()` below traverses symlinks, so a symlink entry
+        // pointing outside the repo would materialize external content into
+        // the worktree — exactly what this sandbox promises to prevent.
+        // Skip symlink entries entirely; share paths via post_create hooks.
+        if entry.path_is_symlink() {
+            if let Ok(rel) = path.strip_prefix(from) {
+                eprintln!("Warning: skipping symlink {} (not copied)", rel.display());
+            }
+            continue;
+        }
         if path.is_file() {
             let rel = match path.strip_prefix(from) {
                 Ok(r) => r,
