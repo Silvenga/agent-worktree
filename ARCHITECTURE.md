@@ -52,8 +52,8 @@ wt new [branch]              # 创建 worktree 并进入（base = current_branch
 wt new [branch] --base <br>  # 显式指定 base 分支（必须存在，覆盖默认；同时记录到 meta）
 wt new [branch] -s <cmd>     # 创建 + snap 模式
 wt cd [branch]               # 切换到指定 worktree（省略则回到主仓库）
-wt ls                        # 列出 worktree（按创建时间降序）
-wt status                    # 查看当前 worktree 详细信息
+wt ls [--json]               # 列出 worktree（按创建时间降序；--json 机器可读输出）
+wt status [--json]           # 查看当前 worktree 详细信息（--json 机器可读输出）
 wt mv <old> <new>            # 重命名 worktree 分支（old 可用 . 表示当前）
 wt rm <branch> [-f]          # 删除 worktree（branch 可用 . 表示当前）
 wt clean [--dry-run]         # 清理所有与 target 无差异的 worktree（target = base_branch > trunk）
@@ -73,6 +73,13 @@ wt sync [options]            # 从 base branch 同步更新到当前 worktree（
     --from <branch>          # 指定同步源分支（覆盖 base branch / trunk，校验存在性）
     --continue               # 解决冲突后继续
     --abort                  # 放弃同步，恢复到冲突前状态
+
+wt run [branch] [options] -- <cmd...>  # Headless snap：建 worktree → 跑 agent → 按结果分派
+    --base <branch>          # 同 wt new --base
+    --on-success <keep|merge>  # agent 成功且只有 commits 时的动作，默认 keep
+    -s, --strategy <squash|merge>  # merge 时的合并策略，默认读 config
+    -H, --skip-hooks         # 跳过 pre-merge hook
+    --json                   # stdout 输出单个结果对象（agent stdout 转投 stderr）
 ```
 
 ### 3. 维护
@@ -177,6 +184,35 @@ wt merge          # merge 并清理
 
 ---
 
+## Headless 模式（wt run）
+
+`wt run` 是 snap 的非交互形态：单进程完成「创建 → 跑 agent → 分派」，无 prompt、无 shell wrapper（不改变调用方 cwd）。面向 CI / 编排器 / `claude -p` 循环。
+
+### 设计要点
+
+- **agent 命令 `--` 尾随、直接 exec 不经 shell** —— 消灭 `-s "cmd with args"` 的引号坑；需要 shell 语义时显式 `sh -c '...'`
+- **复用创建路径**：`lifecycle/new.rs::create_worktree_core()`（base 解析 / copy_files / post_create hook）为 `wt new` 与 `wt run` 单一实现
+- **agent 进程注入 `WT_*` 环境变量**（同 hooks）
+- **失败一律保留现场**：worktree 不删、主仓库 HEAD 复位（复用原子 merge 语义）
+- **验证闸门 = pre_merge hooks**：不设 `--verify`，同一职责禁双机制；`-H` 跳过
+- **不做 auto-commit**：agent 遗留未提交改动视为未完成（退出码 11）
+
+### 退出码契约（机器可依赖，从 10 起避开通用 1 与 snap wrapper 的 0/2/3）
+
+| 码 | 含义 |
+|---|---|
+| 0 | 闭环成功（cleanup / kept / merged） |
+| 10 | agent 非零退出 |
+| 11 | agent 遗留未提交改动 |
+| 12 | pre/post-merge hook 失败 |
+| 13 | 合并冲突或合并失败（含 base 分支消失） |
+
+### `--json` 结果对象
+
+stdout 单行 JSON（agent stdout 转投 stderr，stdout 保持纯净）：`version:1, branch, path, base_branch, merge_target, agent_exit_code, commits, uncommitted, outcome, worktree_removed, exit_code`。`outcome` 取值：`no_changes | kept | merged | agent_failed | uncommitted | hook_failed | merge_conflict | merge_failed`。
+
+---
+
 ## Merge 冲突处理
 
 ### 原子 merge（预检测模式）
@@ -241,6 +277,15 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 
 > 仅识别 git-native 状态。`wt merge` 是原子的，不残留可识别状态。
 
+### JSON 输出（`--json`）
+
+`wt ls --json` / `wt status --json` 输出单行 JSON 到 stdout，人类文案一律走 stderr——供 dashboard/statusline/脚本消费。
+
+- Schema 即公开 API：顶层带 `"version": 1`，字段只增不改
+- `ls`：`{version, worktrees: [{branch, base_branch, current, uncommitted, commits, insertions, deletions, path, created_at}]}`；无 worktree 时输出空数组（非报错）
+- `status`：`{version, branch, base_branch, trunk, merge_target, created_at, commits, uncommitted, insertions, deletions, path, sync_in_progress}`；`sync_in_progress` 取值 `"rebase" | "merge" | null`
+- 不含 agent 运行状态（running/waiting）——那属 dashboard 层职责，wt 只吐 git 侧事实
+
 ---
 
 ## Clean 行为
@@ -276,6 +321,7 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 [general]
 merge_strategy = "squash"               # squash（默认） | merge
 sync_strategy = "rebase"                # rebase（默认） | merge
+submodules = true                       # 新 worktree 自动 init submodule（默认 true）
 # 从主仓库复制到新 worktree 的文件（通常是被 gitignore 但开发必需的），支持 glob
 copy_files = ["*.secret.*"]
 
@@ -289,7 +335,7 @@ post_merge = []
 
 - `copy_files`：global + project **追加**合并
 - `hooks`：project 非空时**完全替代** global（不追加）
-- `merge_strategy` / `sync_strategy`：project 非空时**覆盖** global（`Option` 语义）
+- `merge_strategy` / `sync_strategy` / `submodules`：project 非空时**覆盖** global（`Option` 语义）
 - `trunk`：仅 project 级别配置
 
 ### 项目配置 `.agent-worktree.toml`
@@ -314,6 +360,8 @@ pre_merge = ["pnpm test", "pnpm lint"]
 - **hook CWD**：`pre_merge`/`post_merge` 一律 worktree 根；`post_create` 在新 worktree 内
 - **hook 环境变量**：所有 hook 注入 `WT_MAIN_REPO`（主仓库根）/`WT_WORKTREE`（worktree 路径）/`WT_BRANCH`（分支名）/`WT_BASE_BRANCH`（base 分支：new=创建来源，merge=合并目标）；叠加于继承环境。让 hook 可移植引用路径，如 `post_create = ['ln -s "$WT_MAIN_REPO/node_modules" node_modules']` 软链替代 `copy_files` 复制。`copy_files` 已在支持的文件系统上使用写时复制，故该软链技巧主要用于不支持 CoW 的文件系统
 - **trunk 检测**：`origin/HEAD` > `main` > `master` > 默认 `"main"`
+- **submodule 自动 init**：`git worktree add` 留空 submodule 目录；`.gitmodules` 存在且 `submodules = true`（默认）时创建后执行 `git submodule update --init --recursive`，失败仅警告不中止（离线可选 submodule 不该杀掉创建）
+- **hooksPath 警告**：相对路径的 `core.hooksPath` 按各命令 CWD 解析，在 linked worktree 内静默失效——创建时检测并打印警告
 
 ---
 

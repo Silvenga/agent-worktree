@@ -29,32 +29,36 @@ pub struct NewArgs {
     snap: Option<String>,
 }
 
-pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+/// Result of the shared worktree-creation path.
+pub struct CreatedWorktree {
+    pub branch: String,
+    pub base_branch: String,
+    pub path: std::path::PathBuf,
+    pub repo_root: std::path::PathBuf,
+}
+
+/// Shared by `wt new` and `wt run`: resolve base branch, create the worktree
+/// and its metadata, copy configured files, and run post_create hooks.
+pub fn create_worktree_core(
+    branch_arg: Option<String>,
+    base_arg: Option<&str>,
+    config: &Config,
+) -> Result<CreatedWorktree> {
     // Ensure we're in a git repo
     let repo_root = git::repo_root()?;
     let workspace_id = git::workspace_id()?;
     let workspace_dir = config.workspaces_dir.join(&workspace_id);
-
-    // Nested snap stacks two loops in the parent shell and breaks cwd tracking
-    // when the inner one finishes.
-    if args.snap.is_some() && git::is_cwd_inside(&workspace_dir) {
-        return Err(Error::Other(
-            "Refusing to start snap mode inside an existing worktree.\n\
-             Run 'wt cd' to return to the main repo, then retry."
-                .into(),
-        ));
-    }
 
     // Determine trunk branch
     let trunk = config.resolve_trunk();
 
     // Resolve base branch: --base flag > current branch > trunk.
     // Determines both the checkout starting point and the default merge/sync target.
-    let base_branch = if let Some(ref b) = args.base {
+    let base_branch = if let Some(b) = base_arg {
         if !git::branch_exists(b)? {
             return Err(Error::Other(format!("Branch '{b}' does not exist")));
         }
-        b.clone()
+        b.to_string()
     } else {
         // Detached HEAD falls back to trunk.
         git::current_branch()
@@ -64,23 +68,42 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     };
 
     // Generate or use provided branch name
-    let branch = args.branch.unwrap_or_else(|| {
+    let branch = branch_arg.unwrap_or_else(|| {
         util::generate_unique_branch_name(|n| git::branch_exists(n).unwrap_or(false))
     });
 
-    // Worktree path
-    let wt_dir = &workspace_dir;
-    let wt_path = wt_dir.join(&branch);
+    let wt_path = workspace_dir.join(&branch);
 
     // Create workspace directory if needed
-    std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
+    std::fs::create_dir_all(&workspace_dir).map_err(|e| Error::Other(e.to_string()))?;
 
     git::create_worktree(&wt_path, &branch, &base_branch)?;
 
     let meta = WorktreeMeta::new(base_branch);
-    let meta_path = meta::meta_path(wt_dir, &branch);
+    let meta_path = meta::meta_path(&workspace_dir, &branch);
     meta.save(&meta_path)
         .map_err(|e| Error::Other(e.to_string()))?;
+
+    // `git worktree add` leaves submodule dirs empty; init them so hooks and
+    // agents see a complete checkout. Failure warns instead of aborting —
+    // e.g. an offline optional submodule shouldn't kill worktree creation.
+    if config.submodules && wt_path.join(".gitmodules").exists() {
+        eprintln!("Initializing submodules...");
+        if let Err(e) = git::submodule_update_init(&wt_path) {
+            eprintln!("Warning: submodule init failed: {e}");
+            eprintln!("Run 'git submodule update --init --recursive' in the worktree manually.");
+        }
+    }
+
+    // A relative core.hooksPath resolves against each command's CWD, so git
+    // hooks silently break inside linked worktrees — surface it at creation.
+    if let Some(hooks_path) = git::hooks_path() {
+        if !Path::new(&hooks_path).is_absolute() {
+            eprintln!(
+                "Warning: core.hooksPath '{hooks_path}' is relative and may not resolve inside worktrees."
+            );
+        }
+    }
 
     // Copy files from main repo
     copy_files(&repo_root, &wt_path, config)?;
@@ -105,10 +128,34 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
         }
     }
 
+    Ok(CreatedWorktree {
+        branch,
+        base_branch: meta.base_branch,
+        path: wt_path,
+        repo_root,
+    })
+}
+
+pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+    // Nested snap stacks two loops in the parent shell and breaks cwd tracking
+    // when the inner one finishes.
+    if args.snap.is_some() {
+        let workspace_dir = config.workspaces_dir.join(&git::workspace_id()?);
+        if git::is_cwd_inside(&workspace_dir) {
+            return Err(Error::Other(
+                "Refusing to start snap mode inside an existing worktree.\n\
+                 Run 'wt cd' to return to the main repo, then retry."
+                    .into(),
+            ));
+        }
+    }
+
+    let created = create_worktree_core(args.branch, args.base.as_deref(), config)?;
+
     // Handle snap mode - write path + command for shell wrapper to execute
     if let Some(cmd) = args.snap {
         if path_file.is_some() {
-            write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
+            write_path_file_lines(path_file, &[&created.path.display().to_string(), &cmd])?;
         } else {
             return Err(Error::Other(
                 "Snap mode requires shell integration. Run 'wt setup' first.".into(),
@@ -119,10 +166,13 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
 
     // Write path for shell integration
     if path_file.is_some() {
-        write_path_file(path_file, &wt_path)?;
+        write_path_file(path_file, &created.path)?;
     } else {
-        eprintln!("Created worktree: {branch} (from {})", meta.base_branch);
-        eprintln!("Path: {}", wt_path.display());
+        eprintln!(
+            "Created worktree: {} (from {})",
+            created.branch, created.base_branch
+        );
+        eprintln!("Path: {}", created.path.display());
     }
 
     Ok(())

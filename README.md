@@ -99,6 +99,41 @@ checks the worktree state:
 > deleted while the agent ran, `[m]` errors out. Use `wt merge --into <branch>`
 > to pick an explicit target instead.
 
+## Headless Mode
+
+One-shot for CI / orchestrators / ralph-style loops — no shell integration
+required:
+
+```bash
+wt run fix-bug -- claude -p "fix the bug" --dangerously-skip-permissions
+wt run --on-success merge --json -- codex exec "add tests"
+```
+
+The agent command comes after `--` and is executed directly, without a
+shell — no quoting pitfalls. Flow: create worktree → run agent inside
+(with `WT_*` env vars) → dispatch on the outcome:
+
+| Agent result | Behavior | Exit code |
+|---|---|---|
+| Non-zero exit | Keep worktree | 10 |
+| No changes | Auto cleanup | 0 |
+| Uncommitted changes left | Keep worktree (agent should commit) | 11 |
+| Commits + `--on-success keep` (default) | Keep worktree | 0 |
+| Commits + `--on-success merge` | pre-merge hooks → atomic merge → cleanup | 0 |
+| pre/post-merge hook failure | Keep worktree | 12 |
+| Merge conflict or merge failure | Keep worktree, main repo HEAD restored | 13 |
+
+Failures always preserve the scene: the worktree stays on disk for
+inspection, and the exit code tells scripts exactly what happened.
+
+`--json` prints a single result object to stdout (agent stdout is diverted
+to stderr): `branch`, `path`, `base_branch`, `merge_target`,
+`agent_exit_code`, `commits`, `uncommitted`, `outcome`, `worktree_removed`,
+`exit_code`.
+
+Other flags: `--base <branch>`, `-s <strategy>` (squash/merge), `-H` (skip
+pre-merge hooks).
+
 ## Commands
 
 ### Worktree Management
@@ -111,6 +146,7 @@ checks the worktree state:
 | `wt cd [branch]` | Switch to worktree (omit branch to return to main repo) |
 | `wt ls` | List worktrees |
 | `wt ls -l` | Show full path for each worktree |
+| `wt ls --json` | Machine-readable JSON output (for dashboards/scripts) |
 | `wt mv <old> <new>` | Rename worktree (use `.` for current) |
 | `wt rm <branch>` | Remove worktree (use `.` for current) |
 | `wt rm -f <branch>` | Force remove with uncommitted changes |
@@ -131,12 +167,14 @@ checks the worktree state:
 | `wt sync --from <branch>` | Sync from specific branch (overrides base) |
 | `wt sync --continue` | Continue after resolving conflicts |
 | `wt sync --abort` | Abort sync |
+| `wt run [branch] -- <cmd>` | Headless snap: create worktree → run agent → keep/merge (see Headless Mode) |
 
 ### Info
 
 | Command | Description |
 |---------|-------------|
 | `wt status` | Show current worktree info (also reports in-progress `wt sync` rebase/merge with recovery hints) |
+| `wt status --json` | Machine-readable JSON output |
 | `wt update` | Update to the latest version |
 
 ### Configuration
@@ -168,6 +206,7 @@ export AGENT_WORKTREE_DIR=/data/agent-worktree
 merge_strategy = "squash"  # squash | merge
 sync_strategy = "rebase"   # rebase | merge
 copy_files = [".env", ".env.*"]  # Gitignore-style patterns for files to copy
+submodules = true          # Auto-init submodules in new worktrees
 
 [hooks]
 post_create = ["pnpm install"]
@@ -188,6 +227,12 @@ post_merge = []
 >
 > **Hook CWD** — `pre_merge` and `post_merge` always run with the worktree
 > root as the working directory. `post_create` runs in the new worktree.
+>
+> **Submodules & git hooks** — `git worktree add` leaves submodule
+> directories empty, so new worktrees auto-run
+> `git submodule update --init --recursive` when `.gitmodules` exists
+> (disable with `submodules = false`). A relative `core.hooksPath` does not
+> resolve inside worktrees; creation prints a warning when one is detected.
 >
 > **Hook environment** — every hook receives these variables, so scripts can
 > reference paths without hardcoding them:
@@ -221,6 +266,7 @@ Project config overrides global. `trunk` is project-only; other fields are merge
 trunk = "main"  # Trunk branch (auto-detected if omitted)
 merge_strategy = "merge"  # Override global merge strategy
 sync_strategy = "merge"   # Override global sync strategy
+submodules = false        # Override global submodule auto-init
 copy_files = ["*.secret.*"]  # Appended to global copy_files
 
 [hooks]

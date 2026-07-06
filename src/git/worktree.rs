@@ -95,6 +95,28 @@ pub fn parse_worktree_list(content: &str) -> Vec<WorktreeInfo> {
     worktrees
 }
 
+/// Initialize submodules inside a worktree.
+///
+/// `git worktree add` leaves submodule directories empty; without this,
+/// hooks and agents see an incomplete checkout.
+pub fn submodule_update_init(path: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            path_str(path)?,
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(Error::Command(super::extract_error(&output)));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
     pub path: PathBuf,

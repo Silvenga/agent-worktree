@@ -75,6 +75,65 @@ fn test_ls_shows_worktree_details() {
 }
 
 #[test]
+fn test_ls_json_empty() {
+    let dir = tempdir().unwrap();
+    setup_git_repo(dir.path());
+
+    let output = Command::new(wt_binary())
+        .args(["ls", "--json"])
+        .current_dir(dir.path())
+        .output()
+        .expect("wt ls --json failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    assert_eq!(doc["version"], 1);
+    assert_eq!(doc["worktrees"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_ls_json_details() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    let output = Command::new(wt_binary())
+        .args(["new", "json-ls-test"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt new failed");
+    assert!(
+        output.status.success(),
+        "Command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(wt_binary())
+        .args(["ls", "--json"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt ls --json failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    assert_eq!(doc["version"], 1);
+
+    let worktrees = doc["worktrees"].as_array().unwrap();
+    let entry = worktrees
+        .iter()
+        .find(|w| w["branch"] == "json-ls-test")
+        .expect("created worktree must appear in JSON output");
+
+    assert!(entry["base_branch"].is_string());
+    assert!(entry["path"].as_str().unwrap().contains("json-ls-test"));
+    assert!(entry["created_at"].is_string());
+    assert_eq!(entry["uncommitted"], 0);
+    assert!(entry["current"].is_boolean());
+}
+
+#[test]
 fn test_ls_with_multiple_worktrees() {
     let (_dir, repo, home) = setup_worktree_test_env();
 

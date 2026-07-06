@@ -95,6 +95,37 @@ Agent 退出时（正常或 crash / Ctrl+C），`wt` 检查 worktree 状态：
 > **base_branch 必须仍存在** — 若 agent 运行期间 worktree 的 base 分支被
 > 删除，`[m]` 会报错。改用 `wt merge --into <branch>` 显式指定目标。
 
+## Headless 模式
+
+面向 CI / 编排器 / ralph 循环的一次性闭环——无需 shell 集成：
+
+```bash
+wt run fix-bug -- claude -p "fix the bug" --dangerously-skip-permissions
+wt run --on-success merge --json -- codex exec "add tests"
+```
+
+Agent 命令写在 `--` 之后，直接执行、不经 shell——没有引号坑。
+流程：创建 worktree → 在其中运行 agent（注入 `WT_*` 环境变量）→ 按结果分派：
+
+| Agent 结果 | 行为 | 退出码 |
+|---|---|---|
+| 非零退出 | 保留 worktree | 10 |
+| 无改动 | 自动清理 | 0 |
+| 遗留未提交改动 | 保留 worktree（agent 应自行 commit） | 11 |
+| 有 commits + `--on-success keep`（默认） | 保留 worktree | 0 |
+| 有 commits + `--on-success merge` | pre-merge hooks → 原子合并 → 清理 | 0 |
+| pre/post-merge hook 失败 | 保留 worktree | 12 |
+| 合并冲突或合并失败 | 保留 worktree，主仓库 HEAD 复位 | 13 |
+
+失败一律保留现场：worktree 留在磁盘可检查，退出码告诉脚本确切原因。
+
+`--json` 向 stdout 输出单个结果对象（agent 的 stdout 转投 stderr）：
+`branch`、`path`、`base_branch`、`merge_target`、`agent_exit_code`、
+`commits`、`uncommitted`、`outcome`、`worktree_removed`、`exit_code`。
+
+其他 flag：`--base <branch>`、`-s <strategy>`（squash/merge）、`-H`（跳过
+pre-merge hooks）。
+
 ## 命令
 
 ### Worktree 管理
@@ -107,6 +138,7 @@ Agent 退出时（正常或 crash / Ctrl+C），`wt` 检查 worktree 状态：
 | `wt cd [branch]` | 切换到 worktree（省略则返回主仓库） |
 | `wt ls` | 列出 worktree |
 | `wt ls -l` | 显示每个 worktree 的完整路径 |
+| `wt ls --json` | 机器可读 JSON 输出（供 dashboard/脚本消费） |
 | `wt mv <old> <new>` | 重命名 worktree（`.` 表示当前） |
 | `wt rm <branch>` | 删除 worktree（`.` 表示当前） |
 | `wt rm -f <branch>` | 强制删除（含未提交更改） |
@@ -127,12 +159,14 @@ Agent 退出时（正常或 crash / Ctrl+C），`wt` 检查 worktree 状态：
 | `wt sync --from <branch>` | 从指定分支同步（覆盖 base） |
 | `wt sync --continue` | 解决冲突后继续 |
 | `wt sync --abort` | 放弃同步 |
+| `wt run [branch] -- <cmd>` | Headless snap：建 worktree → 跑 agent → keep/merge（见 Headless 模式） |
 
 ### 信息
 
 | 命令 | 描述 |
 |------|------|
 | `wt status` | 显示当前 worktree 信息（含 `wt sync` 进行中的 rebase/merge 状态及恢复指引） |
+| `wt status --json` | 机器可读 JSON 输出 |
 | `wt update` | 更新到最新版本 |
 
 ### 配置
@@ -164,6 +198,7 @@ export AGENT_WORKTREE_DIR=/data/agent-worktree
 merge_strategy = "squash"  # squash | merge
 sync_strategy = "rebase"   # rebase | merge
 copy_files = [".env", ".env.*"]  # gitignore 风格的文件模式
+submodules = true          # 新 worktree 自动 init submodule
 
 [hooks]
 post_create = ["pnpm install"]
@@ -183,6 +218,11 @@ post_merge = []
 >
 > **Hook CWD** — `pre_merge` 与 `post_merge` 一律 worktree 根；
 > `post_create` 在新 worktree 内。
+>
+> **Submodule 与 git hooks** — `git worktree add` 会留下空的 submodule
+> 目录，故存在 `.gitmodules` 时新 worktree 自动执行
+> `git submodule update --init --recursive`（`submodules = false` 可关）。
+> 相对路径的 `core.hooksPath` 在 worktree 内无法解析，创建时检测到会打印警告。
 >
 > **Hook 环境变量** — 每个 hook 都注入以下变量，脚本可引用路径而不硬编码：
 >
@@ -212,6 +252,7 @@ post_merge = []
 trunk = "main"  # trunk 分支（省略则自动检测）
 merge_strategy = "merge"  # 覆盖全局合并策略
 sync_strategy = "merge"   # 覆盖全局同步策略
+submodules = false        # 覆盖全局 submodule 自动 init
 copy_files = ["*.secret.*"]  # 追加到全局 copy_files
 
 [hooks]

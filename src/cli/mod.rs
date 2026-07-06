@@ -81,8 +81,11 @@ enum Command {
     /// Merge current worktree into trunk
     Merge(commands::MergeArgs),
 
+    /// Create a worktree, run an agent command in it, then keep/merge (headless)
+    Run(commands::RunArgs),
+
     /// Show current worktree information
-    Status,
+    Status(commands::StatusArgs),
 
     /// Sync current worktree from trunk
     Sync(commands::SyncArgs),
@@ -121,7 +124,8 @@ impl Cli {
             Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file),
             Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file),
             Command::Merge(args) => commands::merge::run(args, &config, path_file),
-            Command::Status => commands::status::run(&config),
+            Command::Run(args) => commands::run::run(args, &config),
+            Command::Status(args) => commands::status::run(args, &config),
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),
@@ -239,6 +243,50 @@ mod tests {
     #[test]
     fn test_cli_parse_status() {
         let cli = Cli::try_parse_from(["wt", "status"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_run() {
+        let cli = Cli::try_parse_from(["wt", "run", "--", "claude", "-p", "fix"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_run_full() {
+        let cli = Cli::try_parse_from([
+            "wt",
+            "run",
+            "my-branch",
+            "--base",
+            "develop",
+            "--on-success",
+            "merge",
+            "--json",
+            "-H",
+            "--",
+            "claude",
+            "-p",
+            "task",
+        ]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_run_requires_command() {
+        let cli = Cli::try_parse_from(["wt", "run", "my-branch"]);
+        assert!(cli.is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_status_json() {
+        let cli = Cli::try_parse_from(["wt", "status", "--json"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_ls_json() {
+        let cli = Cli::try_parse_from(["wt", "ls", "--json"]);
         assert!(cli.is_ok());
     }
 

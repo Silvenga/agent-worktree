@@ -161,6 +161,19 @@ pub fn is_cwd_inside(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Value of `core.hooksPath` if configured (unset or empty -> None)
+pub fn hooks_path() -> Option<String> {
+    let output = Command::new("git")
+        .args(["config", "core.hooksPath"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 /// Get current commit hash
 pub fn current_commit() -> Result<String> {
     let output = Command::new("git").args(["rev-parse", "HEAD"]).output()?;

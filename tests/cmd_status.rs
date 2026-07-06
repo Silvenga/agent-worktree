@@ -127,6 +127,46 @@ fn test_status_with_commits() {
 }
 
 #[test]
+fn test_status_json() {
+    let (dir, repo, home) = setup_worktree_test_env();
+
+    let path_file = create_path_file(dir.path());
+    let output = Command::new(wt_binary())
+        .args([
+            "new",
+            "status-json",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt new failed");
+    assert!(output.status.success());
+
+    let wt_path = PathBuf::from(read_path_file(&path_file).trim());
+
+    let output = Command::new(wt_binary())
+        .args(["status", "--json"])
+        .current_dir(&wt_path)
+        .env("HOME", &home)
+        .output()
+        .expect("wt status --json failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let doc: serde_json::Value = serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+    assert_eq!(doc["version"], 1);
+    assert_eq!(doc["branch"], "status-json");
+    assert!(doc["trunk"].is_string());
+    assert!(doc["merge_target"].is_string());
+    assert!(doc["path"].as_str().unwrap().contains("status-json"));
+    assert_eq!(doc["commits"], 0);
+    assert_eq!(doc["uncommitted"], 0);
+    assert!(doc["sync_in_progress"].is_null());
+}
+
+#[test]
 fn test_status_with_base_branch() {
     let (dir, repo, home) = setup_worktree_test_env();
 

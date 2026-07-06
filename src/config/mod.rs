@@ -50,7 +50,7 @@ pub struct ProjectConfig {
     pub hooks: HooksConfig,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralConfig {
     #[serde(default)]
     pub merge_strategy: MergeStrategy,
@@ -60,6 +60,27 @@ pub struct GeneralConfig {
 
     #[serde(default)]
     pub copy_files: Vec<String>,
+
+    /// Auto-init submodules in new worktrees (`git worktree add` leaves them empty)
+    #[serde(default = "default_true")]
+    pub submodules: bool,
+}
+
+// Manual impl: derived Default would give submodules=false, diverging from
+// the serde default and silently disabling the feature when no config exists.
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            merge_strategy: MergeStrategy::default(),
+            sync_strategy: SyncStrategy::default(),
+            copy_files: Vec::new(),
+            submodules: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -69,6 +90,8 @@ pub struct ProjectGeneralConfig {
     pub merge_strategy: Option<MergeStrategy>,
 
     pub sync_strategy: Option<SyncStrategy>,
+
+    pub submodules: Option<bool>,
 
     #[serde(default)]
     pub copy_files: Vec<String>,
@@ -119,6 +142,7 @@ pub struct Config {
     pub merge_strategy: MergeStrategy,
     pub sync_strategy: SyncStrategy,
     pub copy_files: Vec<String>,
+    pub submodules: bool,
     pub hooks: HooksConfig,
     pub trunk: Option<String>,
 }
@@ -144,6 +168,10 @@ impl Config {
             .general
             .sync_strategy
             .unwrap_or(global.general.sync_strategy);
+        let submodules = project
+            .general
+            .submodules
+            .unwrap_or(global.general.submodules);
         let mut copy_files = global.general.copy_files;
         copy_files.extend(project.general.copy_files);
 
@@ -159,6 +187,7 @@ impl Config {
             merge_strategy,
             sync_strategy,
             copy_files,
+            submodules,
             hooks,
             trunk: project.general.trunk,
         })
@@ -402,6 +431,7 @@ post_merge = ["git push", "notify-team"]
                 merge_strategy: MergeStrategy::Merge,
                 sync_strategy: SyncStrategy::default(),
                 copy_files: vec![".env".to_string()],
+                submodules: true,
             },
             hooks: HooksConfig {
                 post_create: vec!["npm install".to_string()],
@@ -472,6 +502,7 @@ trunk = "develop"
                 trunk: Some("develop".to_string()),
                 merge_strategy: None,
                 sync_strategy: None,
+                submodules: None,
                 copy_files: vec![".env.local".to_string()],
             },
             hooks: HooksConfig::default(),
@@ -479,6 +510,37 @@ trunk = "develop"
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("develop"));
         assert!(serialized.contains(".env.local"));
+    }
+
+    #[test]
+    fn test_submodules_default_true() {
+        assert!(GeneralConfig::default().submodules);
+        // Missing key in TOML must also resolve to true (serde default).
+        let config: GlobalConfig = toml::from_str("").unwrap();
+        assert!(config.general.submodules);
+    }
+
+    #[test]
+    fn test_submodules_global_off() {
+        let toml = r#"
+[general]
+submodules = false
+"#;
+        let config: GlobalConfig = toml::from_str(toml).unwrap();
+        assert!(!config.general.submodules);
+    }
+
+    #[test]
+    fn test_submodules_project_override() {
+        let toml = r#"
+[general]
+submodules = false
+"#;
+        let config: ProjectConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.general.submodules, Some(false));
+
+        let config: ProjectConfig = toml::from_str("").unwrap();
+        assert!(config.general.submodules.is_none());
     }
 
     #[test]

@@ -64,6 +64,50 @@ pub fn run_interactive(command: &str, cwd: &Path, env: &HookEnv) -> Result<ExitS
     Ok(status)
 }
 
+/// Run an agent command directly (no shell), inheriting stdin and stderr.
+///
+/// Executing the argv without a shell removes the quoting pitfalls that
+/// `wt new -s "cmd with args"` has. With `stdout_to_stderr`, the agent's
+/// stdout is streamed into our stderr so the caller can keep stdout
+/// reserved for machine-readable output (`--json`).
+pub fn run_agent(
+    argv: &[String],
+    cwd: &Path,
+    env: &HookEnv,
+    stdout_to_stderr: bool,
+) -> Result<ExitStatus> {
+    let (program, rest) = argv.split_first().ok_or_else(|| {
+        Error::Spawn(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty agent command",
+        ))
+    })?;
+
+    let mut cmd = Command::new(program);
+    cmd.args(rest)
+        .current_dir(cwd)
+        .envs(env.vars())
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    if stdout_to_stderr {
+        cmd.stdout(Stdio::piped());
+        let mut child = cmd.spawn()?;
+        // Pump on a thread: the agent may interleave heavy stdout with
+        // stderr, and a full pipe buffer would deadlock a sequential read.
+        let mut out = child.stdout.take().expect("stdout was piped above");
+        let pump = std::thread::spawn(move || {
+            let _ = std::io::copy(&mut out, &mut std::io::stderr());
+        });
+        let status = child.wait()?;
+        let _ = pump.join();
+        Ok(status)
+    } else {
+        cmd.stdout(Stdio::inherit());
+        Ok(cmd.status()?)
+    }
+}
+
 /// Run a hook command
 pub fn run_hook(command: &str, cwd: &Path, env: &HookEnv) -> Result<()> {
     let status = run_interactive(command, cwd, env)?;
