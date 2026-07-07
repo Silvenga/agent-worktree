@@ -1,11 +1,12 @@
 // ===========================================================================
-// Integration Tests - Run Command (headless snap)
+// Integration Tests - Run Command (headless + interactive dispatch)
 // ===========================================================================
 
 mod common;
 
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use common::*;
 
@@ -175,6 +176,219 @@ fn test_run_requires_agent_command() {
     assert!(
         stderr.contains("CMD") || stderr.contains("required"),
         "Expected missing-command error, got: {stderr}"
+    );
+}
+
+// ===========================================================================
+// Interactive dispatch (-i)
+// ===========================================================================
+
+/// Run `wt run -i` with piped stdin (prompts read stdin lines).
+fn wt_run_interactive(
+    repo: &PathBuf,
+    home: &PathBuf,
+    args: &[&str],
+    input: &str,
+) -> std::process::Output {
+    let mut child = Command::new(wt_binary())
+        .arg("run")
+        .arg("-i")
+        .args(args)
+        .current_dir(repo)
+        .env("HOME", home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("wt run -i failed to spawn");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    child.wait_with_output().expect("wt run -i failed")
+}
+
+/// Locate a worktree dir under the fake HOME's workspaces, if it exists.
+fn find_worktree(home: &std::path::Path, branch: &str) -> Option<PathBuf> {
+    let workspaces = home.join(".agent-worktree").join("workspaces");
+    std::fs::read_dir(workspaces)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join(branch))
+        .find(|p| p.exists())
+}
+
+#[test]
+fn test_run_interactive_no_changes_cleans_up() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    let output = wt_run_interactive(&repo, &home, &["iact-clean", "--", "true"], "");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No changes detected"),
+        "Expected cleanup message, got: {stderr}"
+    );
+    assert!(find_worktree(&home, "iact-clean").is_none());
+}
+
+#[test]
+fn test_run_interactive_merge_and_cleanup() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    let output = wt_run_interactive(
+        &repo,
+        &home,
+        &[
+            "iact-merge",
+            "--",
+            "sh",
+            "-c",
+            "echo merged > iact.txt && git add -A && git commit -q -m agent-work",
+        ],
+        "m\n",
+    );
+
+    assert!(output.status.success());
+    // Human decided merge: change lands in main, worktree removed, exit 0.
+    assert!(repo.join("iact.txt").exists());
+    assert!(find_worktree(&home, "iact-merge").is_none());
+}
+
+#[test]
+fn test_run_interactive_quit_preserves_and_writes_path_file() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+    let path_file = create_path_file(repo.parent().unwrap());
+
+    let output = wt_run_interactive(
+        &repo,
+        &home,
+        &[
+            "iact-keep",
+            "--path-file",
+            path_file.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "echo kept > kept.txt && git add -A && git commit -q -m agent-work",
+        ],
+        "q\n",
+    );
+
+    // Preserve is a human decision → exit 0, not a headless failure code.
+    assert_eq!(output.status.code(), Some(0));
+    let wt_path = find_worktree(&home, "iact-keep").expect("worktree must be preserved");
+    // Single-line path_file = shell cds into the preserved worktree.
+    let content = read_path_file(&path_file);
+    assert_eq!(content.lines().count(), 1);
+    // Canonicalize both sides: macOS /var is a symlink to /private/var.
+    assert_eq!(
+        PathBuf::from(content.trim()).canonicalize().unwrap(),
+        wt_path.canonicalize().unwrap()
+    );
+    // Not merged.
+    assert!(!repo.join("kept.txt").exists());
+}
+
+#[test]
+fn test_run_interactive_reopen_then_merge() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    // First pass leaves an untracked file (→ reopen prompt); the reopened
+    // agent commits it (→ merge prompt).
+    let output = wt_run_interactive(
+        &repo,
+        &home,
+        &[
+            "iact-reopen",
+            "--",
+            "sh",
+            "-c",
+            "if [ -f flag ]; then git add -A && git commit -q -m agent-work; else touch flag; fi",
+        ],
+        "r\nm\n",
+    );
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[wt] Reopen #1"),
+        "Expected in-process reopen, got: {stderr}"
+    );
+    assert!(repo.join("flag").exists());
+    assert!(find_worktree(&home, "iact-reopen").is_none());
+}
+
+#[test]
+fn test_run_interactive_agent_failure_still_dispatches() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    // Agent crash with no changes → state check → cleanup, exit 0 (unlike
+    // headless, where a non-zero agent is exit 10).
+    let output = wt_run_interactive(&repo, &home, &["iact-crash", "--", "false"], "");
+
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("checking worktree state"),
+        "Expected post-crash state check, got: {stderr}"
+    );
+    assert!(find_worktree(&home, "iact-crash").is_none());
+}
+
+#[test]
+fn test_run_interactive_conflicts_with_json_and_on_success() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    for extra in [&["--json"][..], &["--on-success", "merge"][..]] {
+        let output = Command::new(wt_binary())
+            .args(["run", "-i"])
+            .args(extra)
+            .args(["--", "true"])
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .output()
+            .expect("wt run failed to execute");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("cannot be used with"),
+            "Expected clap conflict error for {extra:?}, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn test_run_interactive_refuses_inside_worktree() {
+    let (_dir, repo, home) = setup_worktree_test_env();
+
+    // Create a worktree, then start an interactive run from inside it.
+    let output = Command::new(wt_binary())
+        .args(["new", "iact-outer"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt new failed");
+    assert!(output.status.success());
+    let wt_path = find_worktree(&home, "iact-outer").expect("worktree must exist");
+
+    let output = Command::new(wt_binary())
+        .args(["run", "-i", "--", "true"])
+        .current_dir(&wt_path)
+        .env("HOME", &home)
+        .output()
+        .expect("wt run failed");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("inside an existing worktree"),
+        "Expected nested-session refusal, got: {stderr}"
     );
 }
 

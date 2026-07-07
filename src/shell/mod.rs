@@ -126,17 +126,20 @@ const MARKER_BEGIN: &str = "# === agent-worktree BEGIN ===";
 const MARKER_END: &str = "# === agent-worktree END ===";
 
 // ---------------------------------------------------------------------------
-// Shell Wrapper 脚本
+// Shell wrapper scripts
 //
-// 协议约定（修改 snap 行为时，三套脚本必须同步更新）：
-// - snap-continue 退出码: 0=完成(cd 回 repo root), 2=重新打开 agent, 3=退出(留在 worktree)
-// - path_file 格式: 单行=目标路径, 双行=第一行路径+第二行命令(snap 模式)
+// Wrapper contract (keep all three scripts in sync):
+// - The wrapper's only job: run the binary, then cd if the binary wrote a
+//   non-empty path_file (single line = target path). No business loops here —
+//   interactive sessions run inside the binary (`wt run -i`).
+// - Exit codes are propagated verbatim: `wt run` codes are a machine
+//   contract (see cli/commands/run/headless.rs).
 // ---------------------------------------------------------------------------
 
 const BASH_ZSH_WRAPPER: &str = r#"# === agent-worktree BEGIN ===
-# NOTE: Don't use 'path' as variable name - it shadows zsh's $path array
+# NOTE: Don't use 'path'/'status' as variable names - zsh reserves them
 wt() {
-  local wt_bin path_file target_path snap_cmd reopen_count
+  local wt_bin path_file target_path wt_status
   if [[ -n "$ZSH_VERSION" ]]; then
     wt_bin=$(whence -p wt 2>/dev/null)
   else
@@ -150,85 +153,21 @@ wt() {
   case " $* " in
     *" -h "*|*" --help "*) "$wt_bin" "$@"; return ;;
   esac
-  # Use mktemp so concurrent calls (and subshells where $$ is the parent
-  # PID) get unique files; fall back to PID-based name if mktemp missing.
-  path_file=$(mktemp 2>/dev/null) || path_file="${TMPDIR:-/tmp}/wt-path-$$"
   case "$1" in
-    cd)
-      "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
-      if [[ -f "$path_file" ]]; then
-        target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
+    cd|new|rm|mv|merge|clean|run)
+      # Use mktemp so concurrent calls (and subshells where $$ is the parent
+      # PID) get unique files; fall back to PID-based name if mktemp missing.
+      path_file=$(mktemp 2>/dev/null) || path_file="${TMPDIR:-/tmp}/wt-path-$$"
+      "$wt_bin" "$@" --path-file "$path_file"
+      wt_status=$?
+      # -s guards the empty file mktemp created: cd only on a written target
+      if [[ $wt_status -eq 0 && -s "$path_file" ]]; then
+        target_path=$(<"$path_file"); cd "$target_path"
       fi
-      ;;
-    new)
-      # Check for snap mode (-s/--snap)
-      if [[ " $* " == *" -s "* ]] || [[ " $* " == *" --snap "* ]]; then
-        "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
-        if [[ -f "$path_file" ]]; then
-          target_path="$(head -n1 "$path_file")"
-          snap_cmd="$(tail -n1 "$path_file")"
-          rm -f "$path_file"
-          [[ "$target_path" == "$snap_cmd" ]] && snap_cmd=""
-          [[ -n "$target_path" ]] && cd "$target_path"
-          # Run snap mode loop in shell (preserves TTY)
-          if [[ -n "$snap_cmd" ]]; then
-            reopen_count=0
-            while true; do
-              if [[ $reopen_count -gt 0 ]]; then
-                echo "[wt] Reopen #$reopen_count"
-              fi
-              echo "Entering snap mode: $snap_cmd"
-              echo "Worktree: $(basename "$target_path")"
-              echo "---"
-              eval "$snap_cmd"
-              local agent_status=$?
-              if [[ $agent_status -ne 0 ]]; then
-                # Crash / SIGINT / non-zero exit: still consult snap-continue
-                # so the user can choose merge / reopen / preserve instead of
-                # being silently stranded with a half-made worktree.
-                echo "[wt] Agent exited with status $agent_status; checking worktree state..."
-              fi
-              "$wt_bin" snap-continue --path-file "$path_file"
-              local continue_status=$?
-              # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
-              case $continue_status in
-                0)
-                  if [[ -f "$path_file" ]]; then
-                    target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
-                  fi
-                  break
-                  ;;
-                2)
-                  rm -f "$path_file" 2>/dev/null
-                  reopen_count=$((reopen_count + 1))
-                  ;;
-                3)
-                  rm -f "$path_file" 2>/dev/null
-                  break
-                  ;;
-                *)
-                  rm -f "$path_file" 2>/dev/null
-                  break
-                  ;;
-              esac
-            done
-          fi
-        fi
-      else
-        "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
-        if [[ -f "$path_file" ]]; then
-          target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
-        fi
-      fi
-      ;;
-    rm|mv|merge|clean)
-      "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
-      if [[ -f "$path_file" ]]; then
-        target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
-      fi
+      rm -f "$path_file"
+      return $wt_status
       ;;
     *)
-      rm -f "$path_file" 2>/dev/null
       "$wt_bin" "$@"
       ;;
   esac
@@ -255,65 +194,18 @@ function wt
     $wt_bin $argv
     return
   end
-  set -l path_file (mktemp)
   switch $argv[1]
-    case cd
-      $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
-      if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
-    case new
-      if contains -- -s $argv; or contains -- --snap $argv
-        $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
-        if test -f $path_file
-          set -l target_path (head -n1 $path_file)
-          set -l snap_cmd (tail -n1 $path_file)
-          rm -f $path_file
-          test "$target_path" = "$snap_cmd"; and set snap_cmd ""
-          test -n "$target_path"; and cd $target_path
-          if test -n "$snap_cmd"
-            set -l reopen_count 0
-            while true
-              if test $reopen_count -gt 0
-                echo "[wt] Reopen #$reopen_count"
-              end
-              echo "Entering snap mode: $snap_cmd"
-              echo "Worktree: "(basename $target_path)
-              echo "---"
-              eval $snap_cmd
-              set -l agent_status $status
-              if test $agent_status -ne 0
-                echo "[wt] Agent exited with status $agent_status; checking worktree state..."
-              end
-              $wt_bin snap-continue --path-file $path_file
-              set -l continue_status $status
-              # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
-              switch $continue_status
-                case 0
-                  if test -f $path_file
-                    cd (cat $path_file); rm -f $path_file
-                  end
-                  break
-                case 2
-                  rm -f $path_file 2>/dev/null
-                  set reopen_count (math $reopen_count + 1)
-                case 3
-                  rm -f $path_file 2>/dev/null
-                  break
-                case '*'
-                  rm -f $path_file 2>/dev/null
-                  break
-              end
-            end
-          end
-        end
-      else
-        $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
-        if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
+    case cd new rm mv merge clean run
+      set -l path_file (mktemp)
+      $wt_bin $argv --path-file $path_file
+      set -l wt_status $status
+      # -s guards the empty file mktemp created: cd only on a written target
+      if test $wt_status -eq 0; and test -s $path_file
+        cd (cat $path_file)
       end
-    case rm mv merge clean
-      $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
-      if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
-    case '*'
       rm -f $path_file
+      return $wt_status
+    case '*'
       $wt_bin $argv
   end
 end
@@ -330,72 +222,20 @@ function wt {
     & $wtBin.Source @args
     return
   }
-  $pathFile = [System.IO.Path]::GetTempFileName()
   switch ($args[0]) {
-    { $_ -eq 'cd' } {
+    { $_ -in 'cd', 'new', 'rm', 'mv', 'merge', 'clean', 'run' } {
+      $pathFile = [System.IO.Path]::GetTempFileName()
       & $wtBin.Source @args --path-file $pathFile
-      if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
-      if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
-    }
-    'new' {
-      if ($args -contains '-s' -or $args -contains '--snap') {
-        & $wtBin.Source @args --path-file $pathFile
-        if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
-        if (Test-Path $pathFile) {
-          $lines = Get-Content $pathFile
-          $targetPath = $lines[0]
-          $snapCmd = if ($lines.Count -gt 1) { $lines[1] } else { "" }
-          Remove-Item $pathFile
-          if ($targetPath -eq $snapCmd) { $snapCmd = "" }
-          if ($targetPath) { Set-Location $targetPath }
-          if ($snapCmd) {
-            $reopenCount = 0
-            while ($true) {
-              if ($reopenCount -gt 0) {
-                Write-Host "[wt] Reopen #$reopenCount"
-              }
-              Write-Host "Entering snap mode: $snapCmd"
-              Write-Host "Worktree: $(Split-Path $targetPath -Leaf)"
-              Write-Host "---"
-              Invoke-Expression $snapCmd
-              $agentStatus = $LASTEXITCODE
-              if ($agentStatus -ne 0) {
-                Write-Host "[wt] Agent exited with status $agentStatus; checking worktree state..."
-              }
-              & $wtBin.Source snap-continue --path-file $pathFile
-              $continueStatus = $LASTEXITCODE
-              # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
-              if ($continueStatus -eq 0) {
-                if (Test-Path $pathFile) {
-                  Set-Location (Get-Content $pathFile); Remove-Item $pathFile
-                }
-                break
-              } elseif ($continueStatus -eq 2) {
-                Remove-Item $pathFile -ErrorAction SilentlyContinue
-                $reopenCount++
-              } elseif ($continueStatus -eq 3) {
-                Remove-Item $pathFile -ErrorAction SilentlyContinue
-                break
-              } else {
-                Remove-Item $pathFile -ErrorAction SilentlyContinue
-                break
-              }
-            }
-          }
-        }
-      } else {
-        & $wtBin.Source @args --path-file $pathFile
-        if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
-        if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
+      $wtStatus = $LASTEXITCODE
+      # cd only on a written (non-empty) target - GetTempFileName pre-creates the file
+      if ($wtStatus -eq 0 -and (Test-Path $pathFile)) {
+        $target = Get-Content $pathFile -Raw -ErrorAction SilentlyContinue
+        if ($target) { Set-Location $target.Trim() }
       }
-    }
-    { $_ -in 'rm', 'mv', 'merge', 'clean' } {
-      & $wtBin.Source @args --path-file $pathFile
-      if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
-      if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
+      Remove-Item $pathFile -ErrorAction SilentlyContinue
+      if ($wtStatus -ne 0) { return $wtStatus }
     }
     default {
-      Remove-Item $pathFile -ErrorAction SilentlyContinue
       & $wtBin.Source @args
     }
   }

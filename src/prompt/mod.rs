@@ -24,34 +24,34 @@ pub fn confirm(message: &str) -> Result<bool> {
         .map_err(|_| Error::Cancelled)
 }
 
-/// Present options after agent exits with uncommitted changes
+/// Choice after an interactive session's agent exits with uncommitted changes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapExitChoice {
+pub enum ExitChoice {
     Reopen,
     Exit,
 }
 
 /// Parse single character input to choice
-pub fn parse_snap_choice(input: &str) -> Option<SnapExitChoice> {
+pub fn parse_exit_choice(input: &str) -> Option<ExitChoice> {
     match input.trim().to_lowercase().as_str() {
-        "r" => Some(SnapExitChoice::Reopen),
-        "q" => Some(SnapExitChoice::Exit),
+        "r" => Some(ExitChoice::Reopen),
+        "q" => Some(ExitChoice::Exit),
         _ => None,
     }
 }
 
-/// Choice for snap mode when worktree has committed changes
+/// Choice after an interactive session's agent exits with committed changes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapMergeChoice {
+pub enum MergeChoice {
     Merge,
     Exit,
 }
 
 /// Parse single character input to merge choice
-pub fn parse_snap_merge_choice(input: &str) -> Option<SnapMergeChoice> {
+pub fn parse_merge_choice(input: &str) -> Option<MergeChoice> {
     match input.trim().to_lowercase().as_str() {
-        "m" => Some(SnapMergeChoice::Merge),
-        "q" => Some(SnapMergeChoice::Exit),
+        "m" => Some(MergeChoice::Merge),
+        "q" => Some(MergeChoice::Exit),
         _ => None,
     }
 }
@@ -63,7 +63,7 @@ const MAX_PROMPT_ATTEMPTS: usize = 5;
 /// Show options, read user input, parse to a typed choice.
 ///
 /// Re-prompts on unrecognized input rather than treating a stray Enter or
-/// typo as cancellation — silent default-to-Exit during a snap loop is too
+/// typo as cancellation — silent default-to-Exit during a session is too
 /// destructive to be the failure mode for a wrong keystroke.
 fn read_choice<T>(lines: &[&str], prompt_text: &str, parse: fn(&str) -> Option<T>) -> Result<T> {
     use std::io::{self, Write};
@@ -89,29 +89,29 @@ fn read_choice<T>(lines: &[&str], prompt_text: &str, parse: fn(&str) -> Option<T
     Err(Error::Cancelled)
 }
 
-pub fn snap_merge_prompt() -> Result<SnapMergeChoice> {
+pub fn merge_prompt() -> Result<MergeChoice> {
     read_choice(
         &[
             "Worktree has committed changes (not yet merged).",
             "",
-            "  [m] Merge into trunk",
-            "  [q] Exit snap mode",
+            "  [m] Merge into base branch",
+            "  [q] Exit and keep worktree",
         ],
         "[m/q]: ",
-        parse_snap_merge_choice,
+        parse_merge_choice,
     )
 }
 
-pub fn snap_exit_prompt() -> Result<SnapExitChoice> {
+pub fn exit_prompt() -> Result<ExitChoice> {
     read_choice(
         &[
             "Worktree has uncommitted changes.",
             "",
             "  [r] Reopen agent (let agent commit)",
-            "  [q] Exit snap mode (commit manually)",
+            "  [q] Exit and keep worktree (commit manually)",
         ],
         "[r/q]: ",
-        parse_snap_choice,
+        parse_exit_choice,
     )
 }
 
@@ -126,49 +126,49 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_snap_choice_r() {
-        assert_eq!(parse_snap_choice("r"), Some(SnapExitChoice::Reopen));
-        assert_eq!(parse_snap_choice("R"), Some(SnapExitChoice::Reopen));
-        assert_eq!(parse_snap_choice(" r "), Some(SnapExitChoice::Reopen));
+    fn test_parse_exit_choice_r() {
+        assert_eq!(parse_exit_choice("r"), Some(ExitChoice::Reopen));
+        assert_eq!(parse_exit_choice("R"), Some(ExitChoice::Reopen));
+        assert_eq!(parse_exit_choice(" r "), Some(ExitChoice::Reopen));
     }
 
     #[test]
-    fn test_parse_snap_choice_q() {
-        assert_eq!(parse_snap_choice("q"), Some(SnapExitChoice::Exit));
-        assert_eq!(parse_snap_choice("Q"), Some(SnapExitChoice::Exit));
-        assert_eq!(parse_snap_choice(" q\n"), Some(SnapExitChoice::Exit));
+    fn test_parse_exit_choice_q() {
+        assert_eq!(parse_exit_choice("q"), Some(ExitChoice::Exit));
+        assert_eq!(parse_exit_choice("Q"), Some(ExitChoice::Exit));
+        assert_eq!(parse_exit_choice(" q\n"), Some(ExitChoice::Exit));
     }
 
     #[test]
-    fn test_parse_snap_choice_invalid() {
-        assert_eq!(parse_snap_choice(""), None);
-        assert_eq!(parse_snap_choice("x"), None);
-        assert_eq!(parse_snap_choice("c"), None);
-        assert_eq!(parse_snap_choice("reopen"), None);
+    fn test_parse_exit_choice_invalid() {
+        assert_eq!(parse_exit_choice(""), None);
+        assert_eq!(parse_exit_choice("x"), None);
+        assert_eq!(parse_exit_choice("c"), None);
+        assert_eq!(parse_exit_choice("reopen"), None);
     }
 
     // -----------------------------------------------------------------------
-    // SnapMergeChoice tests
+    // MergeChoice tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_parse_snap_merge_choice_m() {
-        assert_eq!(parse_snap_merge_choice("m"), Some(SnapMergeChoice::Merge));
-        assert_eq!(parse_snap_merge_choice("M"), Some(SnapMergeChoice::Merge));
-        assert_eq!(parse_snap_merge_choice(" m "), Some(SnapMergeChoice::Merge));
+    fn test_parse_merge_choice_m() {
+        assert_eq!(parse_merge_choice("m"), Some(MergeChoice::Merge));
+        assert_eq!(parse_merge_choice("M"), Some(MergeChoice::Merge));
+        assert_eq!(parse_merge_choice(" m "), Some(MergeChoice::Merge));
     }
 
     #[test]
-    fn test_parse_snap_merge_choice_q() {
-        assert_eq!(parse_snap_merge_choice("q"), Some(SnapMergeChoice::Exit));
-        assert_eq!(parse_snap_merge_choice("Q"), Some(SnapMergeChoice::Exit));
-        assert_eq!(parse_snap_merge_choice(" q\n"), Some(SnapMergeChoice::Exit));
+    fn test_parse_merge_choice_q() {
+        assert_eq!(parse_merge_choice("q"), Some(MergeChoice::Exit));
+        assert_eq!(parse_merge_choice("Q"), Some(MergeChoice::Exit));
+        assert_eq!(parse_merge_choice(" q\n"), Some(MergeChoice::Exit));
     }
 
     #[test]
-    fn test_parse_snap_merge_choice_invalid() {
-        assert_eq!(parse_snap_merge_choice(""), None);
-        assert_eq!(parse_snap_merge_choice("x"), None);
-        assert_eq!(parse_snap_merge_choice("merge"), None);
+    fn test_parse_merge_choice_invalid() {
+        assert_eq!(parse_merge_choice(""), None);
+        assert_eq!(parse_merge_choice("x"), None);
+        assert_eq!(parse_merge_choice("merge"), None);
     }
 }

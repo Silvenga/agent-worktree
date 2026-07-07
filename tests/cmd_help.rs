@@ -33,7 +33,8 @@ fn test_new_help() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Create a new worktree"));
     assert!(stdout.contains("--base"));
-    assert!(stdout.contains("--snap"));
+    // The 0.12 snap surface is gone: no -s/--snap on `new`.
+    assert!(!stdout.contains("--snap"));
 }
 
 #[test]

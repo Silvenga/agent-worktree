@@ -14,7 +14,7 @@ AI 编程 agent 在隔离环境中工作效果最佳：
 
 - **并行执行**：同时运行多个 agent，互不干扰
 - **环境隔离**：每个功能独立工作目录
-- **Snap 模式**："即用即删"工作流 — 创建 worktree、运行 agent、合并、清理
+- **Run 引擎**："即用即删"工作流 — 创建 worktree、运行 agent、合并、清理。交互式（`wt run -i`）给人用，headless（`wt run`）给 CI/编排器用
 
 ## 安装
 
@@ -60,52 +60,38 @@ wt cd feature-y    # 切换到另一个 worktree
 wt cd              # 返回主仓库
 ```
 
-## Snap 模式
+## 运行 Agent（`wt run`）
 
-AI agent 工作流一行搞定：
+单一引擎：创建 worktree → 在其中运行 agent（注入 `WT_*` 环境变量）→ 按
+结果分派。Agent 命令写在 `--` 之后，直接执行、不经 shell——没有引号坑。
+失败一律保留 worktree 现场。
+
+### 交互式（`-i`）
+
+agent 退出后由你决定去留：
 
 ```bash
-wt new -s claude           # 随机分支名
-wt new fix-bug -s codex    # 指定分支名
-wt new -s "claude --dangerously-skip-permissions"  # 带参数的命令
+wt run -i -- claude
+wt run fix-bug -i -- codex --some-flag
 ```
 
-> **参数引号** — `-s` 只接受单个 token。命令含 flag/参数时务必加引号
-> （`-s "agent --flag"`），否则 shell 会把后续参数交给 `wt new`。
->
-> **嵌套 snap 拒绝** — 在已有 worktree 内执行 `wt new -s` 直接报错。
-> 先 `wt cd` 回主仓库再重试。
+Agent 退出时（含 crash / Ctrl+C——信号只作用于 agent），`wt` 检查状态：
 
-流程：创建 worktree → 进入 → 运行 agent → [开发] → agent 退出 → 检查更改 → 合并 → 清理
+- **无改动** → 自动清理，无 prompt
+- **只有 commits** → `[m]` 合并到 base 分支 / `[q]` 保留 worktree
+- **有未提交更改** → `[r]` 重开 agent / `[q]` 保留 worktree
 
-Agent 退出时（正常或 crash / Ctrl+C），`wt` 检查 worktree 状态：
+保留时 shell 切进该 worktree 方便善后（`git commit` 后 `wt merge`）。
+决定即退出码 0；在已有 worktree 内启动会被拒绝。
 
-- **无改动**：自动清理 worktree
-- **只有 commits**（无未提交更改）：
-  ```
-  [m] 合并到 base 分支
-  [q] 退出 snap mode
-  ```
-- **有未提交更改**：
-  ```
-  [r] 重新打开 agent（让 agent 提交）
-  [q] 退出 snap mode（手动提交）
-  ```
+### Headless（默认）
 
-> **base_branch 必须仍存在** — 若 agent 运行期间 worktree 的 base 分支被
-> 删除，`[m]` 会报错。改用 `wt merge --into <branch>` 显式指定目标。
-
-## Headless 模式
-
-面向 CI / 编排器 / ralph 循环的一次性闭环——无需 shell 集成：
+策略事前声明——面向 CI / 编排器 / ralph 循环，无需 shell 集成：
 
 ```bash
 wt run fix-bug -- claude -p "fix the bug" --dangerously-skip-permissions
 wt run --on-success merge --json -- codex exec "add tests"
 ```
-
-Agent 命令写在 `--` 之后，直接执行、不经 shell——没有引号坑。
-流程：创建 worktree → 在其中运行 agent（注入 `WT_*` 环境变量）→ 按结果分派：
 
 | Agent 结果 | 行为 | 退出码 |
 |---|---|---|
@@ -117,14 +103,9 @@ Agent 命令写在 `--` 之后，直接执行、不经 shell——没有引号�
 | pre/post-merge hook 失败 | 保留 worktree | 12 |
 | 合并冲突或合并失败 | 保留 worktree，主仓库 HEAD 复位 | 13 |
 
-失败一律保留现场：worktree 留在磁盘可检查，退出码告诉脚本确切原因。
-
-`--json` 向 stdout 输出单个结果对象（agent 的 stdout 转投 stderr）：
-`branch`、`path`、`base_branch`、`merge_target`、`agent_exit_code`、
-`commits`、`uncommitted`、`outcome`、`worktree_removed`、`exit_code`。
-
-其他 flag：`--base <branch>`、`-s <strategy>`（squash/merge）、`-H`（跳过
-pre-merge hooks）。
+`--json` 向 stdout 输出单个结果对象（agent 的 stdout 转投 stderr）。其他
+flag：`--base <branch>`、`-s <strategy>`（squash/merge）、`-H`（跳过
+pre-merge hooks）。`--on-success` 与 `--json` 为 headless 专属，与 `-i` 互斥。
 
 ## 命令
 
@@ -134,7 +115,6 @@ pre-merge hooks）。
 |------|------|
 | `wt new [branch]` | 从当前分支创建 worktree（省略则随机命名） |
 | `wt new --base <branch>` | 指定 base 分支（默认为当前分支） |
-| `wt new -s <cmd>` | 创建 + snap 模式 |
 | `wt cd [branch]` | 切换到 worktree（省略则返回主仓库） |
 | `wt ls` | 列出 worktree |
 | `wt ls -l` | 显示每个 worktree 的完整路径 |
@@ -159,7 +139,8 @@ pre-merge hooks）。
 | `wt sync --from <branch>` | 从指定分支同步（覆盖 base） |
 | `wt sync --continue` | 解决冲突后继续 |
 | `wt sync --abort` | 放弃同步 |
-| `wt run [branch] -- <cmd>` | Headless snap：建 worktree → 跑 agent → keep/merge（见 Headless 模式） |
+| `wt run [branch] -- <cmd>` | Headless：建 worktree → 跑 agent → keep/merge |
+| `wt run [branch] -i -- <cmd>` | 交互式：同一流程，agent 退出后 prompt |
 
 ### 信息
 

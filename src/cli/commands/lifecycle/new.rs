@@ -7,7 +7,7 @@ use std::path::Path;
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
 
-use crate::cli::{write_path_file, write_path_file_lines, Error, Result};
+use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
 use crate::git;
@@ -23,10 +23,6 @@ pub struct NewArgs {
     /// Base branch to create from and merge back to (default: current branch)
     #[arg(long, value_name = "BRANCH", add = ArgValueCompleter::new(complete::complete_branches))]
     base: Option<String>,
-
-    /// Run command in snap mode: create -> run -> merge -> cleanup
-    #[arg(short, long, value_name = "CMD")]
-    snap: Option<String>,
 }
 
 /// Result of the shared worktree-creation path.
@@ -137,32 +133,7 @@ pub fn create_worktree_core(
 }
 
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
-    // Nested snap stacks two loops in the parent shell and breaks cwd tracking
-    // when the inner one finishes.
-    if args.snap.is_some() {
-        let workspace_dir = config.workspaces_dir.join(&git::workspace_id()?);
-        if git::is_cwd_inside(&workspace_dir) {
-            return Err(Error::Other(
-                "Refusing to start snap mode inside an existing worktree.\n\
-                 Run 'wt cd' to return to the main repo, then retry."
-                    .into(),
-            ));
-        }
-    }
-
     let created = create_worktree_core(args.branch, args.base.as_deref(), config)?;
-
-    // Handle snap mode - write path + command for shell wrapper to execute
-    if let Some(cmd) = args.snap {
-        if path_file.is_some() {
-            write_path_file_lines(path_file, &[&created.path.display().to_string(), &cmd])?;
-        } else {
-            return Err(Error::Other(
-                "Snap mode requires shell integration. Run 'wt setup' first.".into(),
-            ));
-        }
-        return Ok(());
-    }
 
     // Write path for shell integration
     if path_file.is_some() {

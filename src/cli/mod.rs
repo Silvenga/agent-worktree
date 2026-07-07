@@ -19,15 +19,6 @@ pub fn write_path_file(path_file: Option<&Path>, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Write multiple lines to path file (for snap mode)
-pub fn write_path_file_lines(path_file: Option<&Path>, lines: &[&str]) -> Result<()> {
-    if let Some(file) = path_file {
-        std::fs::write(file, lines.join("\n"))
-            .map_err(|e| Error::Other(format!("failed to write path file: {}", e)))?;
-    }
-    Ok(())
-}
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -101,10 +92,6 @@ enum Command {
 
     /// Update to the latest version
     Update,
-
-    /// Continue snap mode after agent exits (internal use)
-    #[command(hide = true)]
-    SnapContinue,
 }
 
 /// Build clap Command for CompleteEnv (completion generation)
@@ -124,14 +111,13 @@ impl Cli {
             Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file),
             Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file),
             Command::Merge(args) => commands::merge::run(args, &config, path_file),
-            Command::Run(args) => commands::run::run(args, &config),
+            Command::Run(args) => commands::run::run(args, &config, path_file),
             Command::Status(args) => commands::status::run(args, &config),
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),
             Command::Init(args) => commands::sys::init::run(args),
             Command::Update => commands::sys::update::run(),
-            Command::SnapContinue => commands::snap::resume::run(&config, path_file),
         }
     }
 }
@@ -279,6 +265,23 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parse_run_interactive() {
+        let cli = Cli::try_parse_from(["wt", "run", "-i", "--", "claude"]);
+        assert!(cli.is_ok());
+        let cli = Cli::try_parse_from(["wt", "run", "fix-bug", "--interactive", "--", "claude"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_run_interactive_conflicts() {
+        // -i is human-in-the-loop; the machine contract flags are headless-only.
+        let cli = Cli::try_parse_from(["wt", "run", "-i", "--json", "--", "claude"]);
+        assert!(cli.is_err());
+        let cli = Cli::try_parse_from(["wt", "run", "-i", "--on-success", "merge", "--", "claude"]);
+        assert!(cli.is_err());
+    }
+
+    #[test]
     fn test_cli_parse_status_json() {
         let cli = Cli::try_parse_from(["wt", "status", "--json"]);
         assert!(cli.is_ok());
@@ -360,40 +363,17 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parse_new_with_snap() {
-        let cli = Cli::try_parse_from(["wt", "new", "-s", "claude"]);
-        assert!(cli.is_ok());
-    }
-
-    #[test]
-    fn test_cli_parse_new_with_snap_long() {
-        let cli = Cli::try_parse_from(["wt", "new", "--snap", "claude"]);
-        assert!(cli.is_ok());
-    }
-
-    #[test]
-    fn test_cli_parse_new_with_snap_and_branch() {
-        let cli = Cli::try_parse_from(["wt", "new", "my-branch", "-s", "agent"]);
-        assert!(cli.is_ok());
+    fn test_cli_parse_new_snap_removed() {
+        // The 0.12 snap surface is gone without a compat shim: -s/--snap on
+        // `new` and the snap-continue command must be parse errors.
+        assert!(Cli::try_parse_from(["wt", "new", "-s", "claude"]).is_err());
+        assert!(Cli::try_parse_from(["wt", "new", "--snap", "claude"]).is_err());
+        assert!(Cli::try_parse_from(["wt", "snap-continue"]).is_err());
     }
 
     #[test]
     fn test_cli_parse_update() {
         let cli = Cli::try_parse_from(["wt", "update"]);
         assert!(cli.is_ok());
-    }
-
-    #[test]
-    fn test_cli_parse_snap_continue() {
-        let cli = Cli::try_parse_from(["wt", "snap-continue"]);
-        assert!(cli.is_ok());
-    }
-
-    #[test]
-    fn test_cli_snap_continue_is_hidden() {
-        // snap-continue should not appear in help
-        let result = Cli::try_parse_from(["wt", "--help"]);
-        // --help causes early exit but the command is still valid
-        assert!(result.is_err());
     }
 }

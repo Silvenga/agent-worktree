@@ -14,7 +14,7 @@ AI coding agents work best with isolated environments:
 
 - **Parallel execution**: Run multiple agents simultaneously without interference
 - **Clean separation**: Each feature gets its own working directory
-- **Snap mode**: "Use and discard" workflow — create worktree, run agent, merge, cleanup
+- **Run engine**: "Use and discard" workflow — create worktree, run agent, merge, cleanup. Interactive (`wt run -i`) for humans, headless (`wt run`) for CI/orchestrators
 
 ## Install
 
@@ -61,57 +61,42 @@ wt cd feature-y    # Switch to another worktree
 wt cd              # Return to main repository
 ```
 
-## Snap Mode
+## Run an Agent (`wt run`)
 
-One-liner for AI agent workflows:
+One engine: create worktree → run agent inside (`WT_*` env vars injected) →
+dispatch on the outcome. The agent command comes after `--` and runs
+directly, without a shell — no quoting pitfalls. Failures always preserve
+the worktree for inspection.
+
+### Interactive (`-i`)
+
+You decide after the agent exits:
 
 ```bash
-wt new -s claude           # Random branch name
-wt new fix-bug -s codex    # Specified branch name
-wt new -s "claude --dangerously-skip-permissions"  # Command with arguments
+wt run -i -- claude
+wt run fix-bug -i -- codex --some-flag
 ```
 
-> **Argument quoting** — `-s` takes a single token. Use quotes whenever the
-> command has flags or arguments (`-s "agent --flag"`), otherwise the shell
-> hands the trailing args to `wt new` instead.
->
-> **Nested snap is refused** — running `wt new -s` from inside an existing
-> worktree exits with an error. Run `wt cd` to return to the main repo first.
+After the agent exits (even on crash / Ctrl+C — the signal reaches only the
+agent), `wt` checks the worktree:
 
-Flow: Create worktree → Enter → Run agent → [Develop] → Agent exits → Check changes → Merge → Cleanup
+- **No changes** → cleanup, no prompt
+- **Only commits** → `[m]` merge into base branch / `[q]` keep worktree
+- **Uncommitted changes** → `[r]` reopen the agent / `[q]` keep worktree
 
-After the agent exits — whether normally or with a crash / Ctrl+C — `wt`
-checks the worktree state:
+When a worktree is kept, your shell switches into it (`git commit`, then
+`wt merge`). Interactive sessions exit 0 once you've decided; starting one
+from inside an existing worktree is refused.
 
-- **No changes**: Worktree cleaned up automatically
-- **Only commits** (nothing uncommitted):
-  ```
-  [m] Merge into base branch
-  [q] Exit snap mode
-  ```
-- **Uncommitted changes**:
-  ```
-  [r] Reopen agent (let agent commit)
-  [q] Exit snap mode (commit manually)
-  ```
+### Headless (default)
 
-> **base_branch must still exist** — if the worktree's base branch was
-> deleted while the agent ran, `[m]` errors out. Use `wt merge --into <branch>`
-> to pick an explicit target instead.
-
-## Headless Mode
-
-One-shot for CI / orchestrators / ralph-style loops — no shell integration
-required:
+Policy declared upfront — for CI / orchestrators / ralph-style loops, no
+shell integration required:
 
 ```bash
 wt run fix-bug -- claude -p "fix the bug" --dangerously-skip-permissions
 wt run --on-success merge --json -- codex exec "add tests"
 ```
-
-The agent command comes after `--` and is executed directly, without a
-shell — no quoting pitfalls. Flow: create worktree → run agent inside
-(with `WT_*` env vars) → dispatch on the outcome:
 
 | Agent result | Behavior | Exit code |
 |---|---|---|
@@ -123,16 +108,10 @@ shell — no quoting pitfalls. Flow: create worktree → run agent inside
 | pre/post-merge hook failure | Keep worktree | 12 |
 | Merge conflict or merge failure | Keep worktree, main repo HEAD restored | 13 |
 
-Failures always preserve the scene: the worktree stays on disk for
-inspection, and the exit code tells scripts exactly what happened.
-
 `--json` prints a single result object to stdout (agent stdout is diverted
-to stderr): `branch`, `path`, `base_branch`, `merge_target`,
-`agent_exit_code`, `commits`, `uncommitted`, `outcome`, `worktree_removed`,
-`exit_code`.
-
-Other flags: `--base <branch>`, `-s <strategy>` (squash/merge), `-H` (skip
-pre-merge hooks).
+to stderr). Other flags: `--base <branch>`, `-s <strategy>` (squash/merge),
+`-H` (skip pre-merge hooks). `--on-success`/`--json` are headless-only and
+conflict with `-i`.
 
 ## Commands
 
@@ -142,7 +121,6 @@ pre-merge hooks).
 |---------|-------------|
 | `wt new [branch]` | Create worktree from current branch (random name if omitted) |
 | `wt new --base <branch>` | Create from specific base branch (default: current branch) |
-| `wt new -s <cmd>` | Create + snap mode |
 | `wt cd [branch]` | Switch to worktree (omit branch to return to main repo) |
 | `wt ls` | List worktrees |
 | `wt ls -l` | Show full path for each worktree |
@@ -167,7 +145,8 @@ pre-merge hooks).
 | `wt sync --from <branch>` | Sync from specific branch (overrides base) |
 | `wt sync --continue` | Continue after resolving conflicts |
 | `wt sync --abort` | Abort sync |
-| `wt run [branch] -- <cmd>` | Headless snap: create worktree → run agent → keep/merge (see Headless Mode) |
+| `wt run [branch] -- <cmd>` | Headless: create worktree → run agent → keep/merge |
+| `wt run [branch] -i -- <cmd>` | Interactive: same flow, prompt after agent exits |
 
 ### Info
 

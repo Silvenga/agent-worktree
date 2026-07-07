@@ -4,7 +4,6 @@
 
 pub mod lifecycle;
 pub mod nav;
-pub mod snap;
 pub mod sys;
 
 pub mod ls;

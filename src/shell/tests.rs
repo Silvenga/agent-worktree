@@ -147,13 +147,57 @@ fn test_wrapper_script_contains_wt_function() {
 #[test]
 fn test_wrapper_script_handles_cd_command() {
     let bash = Shell::Bash.wrapper_script();
-    assert!(bash.contains("cd)"));
+    assert!(bash.contains("cd|new|rm|mv|merge|clean|run)"));
 
     let fish = Shell::Fish.wrapper_script();
-    assert!(fish.contains("case cd"));
+    assert!(fish.contains("case cd new rm mv merge clean run"));
 
     let ps = Shell::PowerShell.wrapper_script();
-    assert!(ps.contains("'cd'"));
+    assert!(ps.contains("'cd', 'new', 'rm', 'mv', 'merge', 'clean', 'run'"));
+}
+
+// =========================================================================
+// Wrapper contract tests: no business loops, single-line path_file only
+// =========================================================================
+#[test]
+fn test_wrapper_scripts_have_no_snap_loop() {
+    for shell in [Shell::Bash, Shell::Fish, Shell::PowerShell] {
+        let wrapper = shell.wrapper_script();
+        assert!(
+            !wrapper.contains("snap-continue"),
+            "{shell:?} wrapper must not call snap-continue (loop moved into the binary)"
+        );
+        assert!(
+            !wrapper.contains("head -n1") && !wrapper.contains("$lines[1]"),
+            "{shell:?} wrapper must not parse a multi-line path_file"
+        );
+    }
+    // Agent commands are never eval'd by the wrapper anymore. (PowerShell's
+    // completion init legitimately uses Invoke-Expression, so only the
+    // POSIX shells get the blanket check.)
+    for shell in [Shell::Bash, Shell::Fish] {
+        assert!(
+            !shell.wrapper_script().contains("eval "),
+            "{shell:?} wrapper must not eval agent commands"
+        );
+    }
+}
+
+#[test]
+fn test_wrapper_scripts_propagate_exit_code() {
+    // `wt run` exit codes are a machine contract; the wrapper must return
+    // the binary's status, not the status of its own cleanup commands.
+    let bash = Shell::Bash.wrapper_script();
+    assert!(bash.contains("wt_status=$?"));
+    assert!(bash.contains("return $wt_status"));
+
+    let fish = Shell::Fish.wrapper_script();
+    assert!(fish.contains("set -l wt_status $status"));
+    assert!(fish.contains("return $wt_status"));
+
+    let ps = Shell::PowerShell.wrapper_script();
+    assert!(ps.contains("$wtStatus = $LASTEXITCODE"));
+    assert!(ps.contains("return $wtStatus"));
 }
 
 // =========================================================================
