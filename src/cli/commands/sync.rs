@@ -13,7 +13,7 @@ use crate::meta;
 
 #[derive(Args)]
 pub struct SyncArgs {
-    /// Sync strategy (default: rebase)
+    /// Sync strategy (default: merge)
     #[arg(short, long, value_enum)]
     strategy: Option<SyncStrategy>,
 

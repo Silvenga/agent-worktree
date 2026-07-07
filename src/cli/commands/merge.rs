@@ -16,7 +16,7 @@ use crate::process;
 
 #[derive(Args)]
 pub struct MergeArgs {
-    /// Merge strategy (default: squash)
+    /// Merge strategy (default: merge)
     #[arg(short, long, value_enum)]
     strategy: Option<MergeStrategy>,
 

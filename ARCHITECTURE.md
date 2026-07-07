@@ -62,13 +62,13 @@ wt clean [--dry-run]         # 清理所有与 target 无差异的 worktree（ta
 
 ```bash
 wt merge [options]           # 合并当前 worktree（默认 merge 回 base branch，fallback trunk）
-    -s, --strategy <squash|merge>  # 合并策略，默认 squash
+    -s, --strategy <squash|merge>  # 合并策略，默认 merge
     --into <branch>          # 合并到指定分支（覆盖 base branch / trunk，校验存在性）
     -d, --delete             # 合并后删除 worktree（默认保留）
     -H, --skip-hooks         # 跳过 pre-merge hook
 
 wt sync [options]            # 从 base branch 同步更新到当前 worktree（fallback trunk）
-    -s, --strategy <rebase|merge>  # 同步策略，默认 rebase（可被 sync_strategy 配置覆盖）
+    -s, --strategy <rebase|merge>  # 同步策略，默认 merge（可被 sync_strategy 配置覆盖）
     --from <branch>          # 指定同步源分支（覆盖 base branch / trunk，校验存在性）
     --continue               # 解决冲突后继续
     --abort                  # 放弃同步，恢复到冲突前状态
@@ -326,8 +326,8 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 
 ```toml
 [general]
-merge_strategy = "squash"               # squash（默认） | merge
-sync_strategy = "rebase"                # rebase（默认） | merge
+merge_strategy = "merge"                # squash | merge（默认）
+sync_strategy = "merge"                 # rebase | merge（默认）
 submodules = true                       # 新 worktree 自动 init submodule（默认 true）
 # 从主仓库复制到新 worktree 的文件（通常是被 gitignore 但开发必需的），支持 glob
 copy_files = ["*.secret.*"]

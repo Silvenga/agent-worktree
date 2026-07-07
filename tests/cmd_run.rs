@@ -125,7 +125,7 @@ fn test_run_on_success_merge_merges_and_cleans_up() {
     assert_eq!(doc["merge_target"], "main");
     assert_eq!(doc["worktree_removed"], true);
     assert!(!PathBuf::from(doc["path"].as_str().unwrap()).exists());
-    // Squash-merged into main: the file must appear in the main repo.
+    // Merged into main: the file must appear in the main repo.
     assert!(repo.join("merged.txt").exists());
 }
 

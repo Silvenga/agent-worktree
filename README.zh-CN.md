@@ -129,12 +129,12 @@ pre-merge hooks）。`--on-success` 与 `--json` 为 headless 专属，与 `-i` 
 
 | 命令 | 描述 |
 |------|------|
-| `wt merge` | 合并到 base 分支（fallback trunk，默认 squash） |
+| `wt merge` | 合并到 base 分支（fallback trunk，默认 merge） |
 | `wt merge -s <strategy>` | 指定合并策略（squash/merge） |
 | `wt merge --into <branch>` | 合并到指定分支（覆盖 base） |
 | `wt merge -d` | 合并后删除 worktree（默认保留） |
 | `wt merge -H` | 跳过 pre-merge hooks |
-| `wt sync` | 从 base 分支同步更新（fallback trunk，默认 rebase） |
+| `wt sync` | 从 base 分支同步更新（fallback trunk，默认 merge） |
 | `wt sync -s <strategy>` | 指定同步策略（rebase/merge） |
 | `wt sync --from <branch>` | 从指定分支同步（覆盖 base） |
 | `wt sync --continue` | 解决冲突后继续 |
@@ -176,8 +176,8 @@ export AGENT_WORKTREE_DIR=/data/agent-worktree
 
 ```toml
 [general]
-merge_strategy = "squash"  # squash | merge
-sync_strategy = "rebase"   # rebase | merge
+merge_strategy = "merge"   # squash | merge
+sync_strategy = "merge"    # rebase | merge
 copy_files = [".env", ".env.*"]  # gitignore 风格的文件模式
 submodules = true          # 新 worktree 自动 init submodule
 

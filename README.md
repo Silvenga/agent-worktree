@@ -135,12 +135,12 @@ conflict with `-i`.
 
 | Command | Description |
 |---------|-------------|
-| `wt merge` | Merge to base branch (falls back to trunk, default: squash) |
+| `wt merge` | Merge to base branch (falls back to trunk, default: merge) |
 | `wt merge -s <strategy>` | Merge with strategy (squash/merge) |
 | `wt merge --into <branch>` | Merge to specific branch (overrides base) |
 | `wt merge -d` | Delete worktree after merge (default: keep) |
 | `wt merge -H` | Skip pre-merge hooks |
-| `wt sync` | Sync from base branch (falls back to trunk, default: rebase) |
+| `wt sync` | Sync from base branch (falls back to trunk, default: merge) |
 | `wt sync -s <strategy>` | Sync with strategy (rebase/merge) |
 | `wt sync --from <branch>` | Sync from specific branch (overrides base) |
 | `wt sync --continue` | Continue after resolving conflicts |
@@ -182,8 +182,8 @@ export AGENT_WORKTREE_DIR=/data/agent-worktree
 
 ```toml
 [general]
-merge_strategy = "squash"  # squash | merge
-sync_strategy = "rebase"   # rebase | merge
+merge_strategy = "merge"   # squash | merge
+sync_strategy = "merge"    # rebase | merge
 copy_files = [".env", ".env.*"]  # Gitignore-style patterns for files to copy
 submodules = true          # Auto-init submodules in new worktrees
 

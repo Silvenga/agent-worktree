@@ -112,8 +112,8 @@ pub struct HooksConfig {
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeStrategy {
-    #[default]
     Squash,
+    #[default]
     Merge,
 }
 
@@ -126,8 +126,8 @@ impl MergeStrategy {
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncStrategy {
-    #[default]
     Rebase,
+    #[default]
     Merge,
 }
 
@@ -257,8 +257,8 @@ mod tests {
     #[test]
     fn test_global_config_defaults() {
         let config = GlobalConfig::default();
-        assert_eq!(config.general.merge_strategy, MergeStrategy::Squash);
-        assert_eq!(config.general.sync_strategy, SyncStrategy::Rebase);
+        assert_eq!(config.general.merge_strategy, MergeStrategy::Merge);
+        assert_eq!(config.general.sync_strategy, SyncStrategy::Merge);
         assert!(config.general.copy_files.is_empty());
         assert!(config.hooks.post_create.is_empty());
     }
@@ -347,7 +347,7 @@ merge_strategy = "merge"
 
     #[test]
     fn test_sync_strategy_defaults() {
-        assert_eq!(SyncStrategy::default(), SyncStrategy::Rebase);
+        assert_eq!(SyncStrategy::default(), SyncStrategy::Merge);
     }
 
     #[test]
