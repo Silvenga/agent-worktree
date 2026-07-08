@@ -1,5 +1,5 @@
 // ===========================================================================
-// git/ops - Git 执行操作
+// git/ops - git execution operations
 // ===========================================================================
 
 use std::process::Command;
@@ -100,7 +100,7 @@ pub fn merge_continue() -> Result<()> {
     run(&["commit", "--no-edit"])
 }
 
-/// 获取 git 目录路径
+/// Get the git directory path
 fn git_dir() -> Option<std::path::PathBuf> {
     Command::new("git")
         .args(["rev-parse", "--git-dir"])

@@ -17,7 +17,7 @@ use std::process::Command;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// 安全的 Path -> &str 转换，替代 .to_str().unwrap()
+/// Safe Path -> &str conversion, replacing .to_str().unwrap()
 pub(crate) fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| Error::Command(format!("path contains invalid UTF-8: {}", path.display())))
@@ -83,7 +83,7 @@ fn clean_git_error(stderr: &str) -> String {
     msg.to_string()
 }
 
-/// 执行 git 命令，失败时从 stderr+stdout 提取错误信息
+/// Run a git command; on failure extract the error from stderr+stdout
 fn run(args: &[&str]) -> Result<()> {
     let output = Command::new("git").args(args).output()?;
     if !output.status.success() {

@@ -37,13 +37,11 @@ pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<
     let new_path = wt_dir.join(&args.new_branch);
 
     if !old_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(old_branch.clone())));
+        return Err(Error::Git(git::Error::WorktreeNotFound(old_branch)));
     }
 
     if new_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeExists(
-            args.new_branch.clone(),
-        )));
+        return Err(Error::Git(git::Error::WorktreeExists(args.new_branch)));
     }
 
     // Check if we're inside the worktree being renamed

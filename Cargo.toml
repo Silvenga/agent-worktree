@@ -33,3 +33,26 @@ ctrlc = "3"
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"
+
+[lints.rust]
+# Compiled from CLAUDE.local.md ("functional + immutable" intent) by prompt-to-code.
+# Zero real unsafe today; denying it locks memory safety and shuts the main door
+# to global mutable state (mutating a `static mut` requires unsafe).
+unsafe_code = "deny"
+# An earlier, clearer error than the unsafe denial for "no global mutable state".
+static_mut_refs = "deny"
+
+[lints.clippy]
+# Sound functional / immutable-leaning nudges: each flags "there is a more
+# functional or less-mutable way HERE", never a blanket ban on `for` or `mut`
+# (those would be dogmatic and fight Rust's ownership model — left as prompt).
+needless_pass_by_ref_mut = "deny"  # drop &mut params that need not be mutable
+redundant_clone = "deny"           # fewer needless clones -> move-based flow
+needless_range_loop = "deny"       # prefer iterators over index loops
+manual_map = "deny"
+manual_filter = "deny"
+manual_flatten = "deny"
+map_clone = "deny"
+unnecessary_fold = "deny"
+filter_map_next = "deny"
+mut_mut = "deny"

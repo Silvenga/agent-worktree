@@ -1,7 +1,7 @@
 // ===========================================================================
 // wt run - Run engine: create worktree, run agent, dispatch on outcome
 //
-// One engine, two dispatch strategies (see ARCHITECTURE.md "Run 引擎"):
+// One engine, two dispatch strategies (see the "Run engine" section in ARCHITECTURE.md):
 // - headless (default): policy declared upfront via --on-success, exit-code
 //   contract + --json for CI/orchestrators
 // - interactive (-i): prompt after the agent exits, reopen loop in-process

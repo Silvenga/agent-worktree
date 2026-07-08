@@ -1,0 +1,24 @@
+# Compiled from CLAUDE.local.md by prompt-to-code — second enforcement layer
+# (guards human commits; the Claude Code hooks in .claude/settings.json are the
+# primary wall for agent edits). Activate once with: pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: "Lint + Format zero warnings (rustfmt)"
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: "Lint + Format zero warnings (clippy -D warnings)"
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: repo-hygiene
+        name: "files <= 500 lines / comments+code text English"
+        entry: cargo test --test repo_hygiene --quiet
+        language: system
+        types: [rust]
+        pass_filenames: false

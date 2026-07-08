@@ -82,7 +82,7 @@ pub fn check_update(current_version: &str) -> Result<Option<String>> {
         .read_to_string()
         .map_err(|e| Error::Parse(e.to_string()))?;
 
-    // 解析 JSON 获取 version 字段
+    // Parse JSON to read the version field
     #[derive(serde::Deserialize)]
     struct NpmPackage {
         version: String,

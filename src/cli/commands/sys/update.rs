@@ -7,14 +7,14 @@ use crate::update;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 更新行为：纯逻辑，不涉及 IO
+/// Update behavior: pure logic, no IO
 #[derive(Debug)]
 pub enum UpdateAction {
     AlreadyUpToDate,
     UpdateAvailable(String),
 }
 
-/// 根据版本检查结果决定行为
+/// Decide behavior from the version-check result
 pub fn determine_action(check_result: update::Result<Option<String>>) -> cli::Result<UpdateAction> {
     match check_result {
         Ok(Some(latest)) => Ok(UpdateAction::UpdateAvailable(latest)),
@@ -25,7 +25,7 @@ pub fn determine_action(check_result: update::Result<Option<String>>) -> cli::Re
     }
 }
 
-/// 构造 npm install 命令参数
+/// Build the npm install command arguments
 pub fn npm_install_args() -> Vec<&'static str> {
     vec!["install", "-g", "agent-worktree@latest"]
 }

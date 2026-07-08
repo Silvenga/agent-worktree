@@ -39,7 +39,7 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     let wt_path = wt_dir.join(&branch);
 
     if !wt_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(branch.clone())));
+        return Err(Error::Git(git::Error::WorktreeNotFound(branch)));
     }
 
     // Check if we're inside the worktree being removed
