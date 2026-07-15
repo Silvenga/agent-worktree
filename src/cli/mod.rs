@@ -259,6 +259,27 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parse_run_path_file_stays_before_agent_delimiter() {
+        let cli = Cli::try_parse_from([
+            "wt",
+            "run",
+            "--path-file",
+            "/tmp/wt-path",
+            "--",
+            "codex",
+            "--model",
+            "gpt-5",
+        ])
+        .expect("wrapper-shaped run invocation should parse");
+
+        assert_eq!(
+            cli.path_file,
+            Some(std::path::PathBuf::from("/tmp/wt-path"))
+        );
+        assert!(matches!(cli.command, Command::Run(_)));
+    }
+
+    #[test]
     fn test_cli_parse_run_requires_command() {
         let cli = Cli::try_parse_from(["wt", "run", "my-branch"]);
         assert!(cli.is_err());

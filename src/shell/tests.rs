@@ -157,6 +157,83 @@ fn test_wrapper_script_handles_cd_command() {
     assert!(ps.contains("'cd', 'new', 'rm', 'mv', 'merge', 'clean', 'run'"));
 }
 
+#[test]
+fn test_wrapper_scripts_insert_path_file_before_agent_delimiter() {
+    // `wt run` uses `--` to make all remaining arguments agent-owned. The
+    // wrapper must therefore insert its private option before that boundary.
+    let bash = Shell::Bash.wrapper_script();
+    assert!(bash.contains("for wt_arg in \"$@\"; do"));
+    assert!(bash.contains("wt_args+=(--path-file \"$path_file\")"));
+    assert!(bash.contains("\"$wt_bin\" \"${wt_args[@]}\""));
+    assert!(!bash.contains("\"$wt_bin\" \"$@\" --path-file"));
+
+    let fish = Shell::Fish.wrapper_script();
+    assert!(fish.contains("for wt_arg in $argv"));
+    assert!(fish.contains("set -a wt_args --path-file $path_file"));
+    assert!(fish.contains("$wt_bin $wt_args"));
+    assert!(!fish.contains("$wt_bin $argv --path-file"));
+
+    let powershell = Shell::PowerShell.wrapper_script();
+    assert!(powershell.contains("foreach ($arg in $args)"));
+    assert!(powershell.contains("$wtArgs += '--path-file'"));
+    assert!(powershell.contains("& $wtBin.Source @wtArgs"));
+    assert!(!powershell.contains("& $wtBin.Source @args --path-file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_bash_wrapper_keeps_path_file_out_of_agent_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+    let wrapper = dir.path().join("wrapper.bash");
+    let bin_dir = dir.path().join("bin");
+    let fake_wt = bin_dir.join("wt");
+    let captured = dir.path().join("arguments");
+    std::fs::create_dir(&bin_dir).unwrap();
+    std::fs::write(&wrapper, Shell::Bash.wrapper_script()).unwrap();
+    std::fs::write(
+        &fake_wt,
+        "#!/bin/sh\n[ -n \"$COMPLETE\" ] || printf '%s\\n' \"$@\" > \"$WT_CAPTURE\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&fake_wt).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_wt, permissions).unwrap();
+
+    let output = Command::new("bash")
+        .args([
+            "--noprofile",
+            "--norc",
+            "-c",
+            "source \"$WRAPPER\"; wt run -- codex --model gpt-5",
+        ])
+        .env("WRAPPER", &wrapper)
+        .env("WT_CAPTURE", &captured)
+        .env(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .output()
+        .expect("bash must execute generated wrapper");
+    assert!(
+        output.status.success(),
+        "wrapper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let args: Vec<_> = std::fs::read_to_string(&captured)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(args[0], "run");
+    assert_eq!(args[1], "--path-file");
+    assert_eq!(args[3], "--");
+    assert_eq!(&args[4..], ["codex", "--model", "gpt-5"]);
+}
+
 // =========================================================================
 // Wrapper contract tests: no business loops, single-line path_file only
 // =========================================================================

@@ -132,6 +132,8 @@ const MARKER_END: &str = "# === agent-worktree END ===";
 // - The wrapper's only job: run the binary, then cd if the binary wrote a
 //   non-empty path_file (single line = target path). No business loops here —
 //   interactive sessions run inside the binary (`wt run -i`).
+// - Internal options are inserted before the first `--`, preserving the agent
+//   command as an opaque argument vector.
 // - Exit codes are propagated verbatim: `wt run` codes are a machine
 //   contract (see cli/commands/run/headless.rs).
 // ---------------------------------------------------------------------------
@@ -139,7 +141,8 @@ const MARKER_END: &str = "# === agent-worktree END ===";
 const BASH_ZSH_WRAPPER: &str = r#"# === agent-worktree BEGIN ===
 # NOTE: Don't use 'path'/'status' as variable names - zsh reserves them
 wt() {
-  local wt_bin path_file target_path wt_status
+  local wt_bin path_file target_path wt_status wt_arg path_file_inserted
+  local -a wt_args
   if [[ -n "$ZSH_VERSION" ]]; then
     wt_bin=$(whence -p wt 2>/dev/null)
   else
@@ -158,7 +161,21 @@ wt() {
       # Use mktemp so concurrent calls (and subshells where $$ is the parent
       # PID) get unique files; fall back to PID-based name if mktemp missing.
       path_file=$(mktemp 2>/dev/null) || path_file="${TMPDIR:-/tmp}/wt-path-$$"
-      "$wt_bin" "$@" --path-file "$path_file"
+      # `wt run -- <agent>` treats every argument after `--` as belonging to
+      # the agent, so inject the wrapper option before that delimiter.
+      wt_args=()
+      path_file_inserted=
+      for wt_arg in "$@"; do
+        if [[ "$wt_arg" == "--" && -z "$path_file_inserted" ]]; then
+          wt_args+=(--path-file "$path_file")
+          path_file_inserted=1
+        fi
+        wt_args+=("$wt_arg")
+      done
+      if [[ -z "$path_file_inserted" ]]; then
+        wt_args+=(--path-file "$path_file")
+      fi
+      "$wt_bin" "${wt_args[@]}"
       wt_status=$?
       # -s guards the empty file mktemp created: cd only on a written target
       if [[ $wt_status -eq 0 && -s "$path_file" ]]; then
@@ -197,7 +214,21 @@ function wt
   switch $argv[1]
     case cd new rm mv merge clean run
       set -l path_file (mktemp)
-      $wt_bin $argv --path-file $path_file
+      # Insert before the agent delimiter so `wt run -- <agent>` keeps agent
+      # arguments opaque.
+      set -l wt_args
+      set -l path_file_inserted 0
+      for wt_arg in $argv
+        if test "$wt_arg" = --; and test $path_file_inserted -eq 0
+          set -a wt_args --path-file $path_file
+          set path_file_inserted 1
+        end
+        set -a wt_args $wt_arg
+      end
+      if test $path_file_inserted -eq 0
+        set -a wt_args --path-file $path_file
+      end
+      $wt_bin $wt_args
       set -l wt_status $status
       # -s guards the empty file mktemp created: cd only on a written target
       if test $wt_status -eq 0; and test -s $path_file
@@ -225,7 +256,23 @@ function wt {
   switch ($args[0]) {
     { $_ -in 'cd', 'new', 'rm', 'mv', 'merge', 'clean', 'run' } {
       $pathFile = [System.IO.Path]::GetTempFileName()
-      & $wtBin.Source @args --path-file $pathFile
+      # Insert before the agent delimiter so `wt run -- <agent>` keeps agent
+      # arguments opaque.
+      $wtArgs = @()
+      $pathFileInserted = $false
+      foreach ($arg in $args) {
+        if ($arg -eq '--' -and -not $pathFileInserted) {
+          $wtArgs += '--path-file'
+          $wtArgs += $pathFile
+          $pathFileInserted = $true
+        }
+        $wtArgs += $arg
+      }
+      if (-not $pathFileInserted) {
+        $wtArgs += '--path-file'
+        $wtArgs += $pathFile
+      }
+      & $wtBin.Source @wtArgs
       $wtStatus = $LASTEXITCODE
       # cd only on a written (non-empty) target - GetTempFileName pre-creates the file
       if ($wtStatus -eq 0 -and (Test-Path $pathFile)) {
