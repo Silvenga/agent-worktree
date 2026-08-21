@@ -56,6 +56,33 @@ sync_versions() {
 }
 
 # ============================================================
+# Binary Gate
+# ============================================================
+
+# The Rust binary bakes CARGO_PKG_VERSION in at compile time, while
+# sync_versions() only rewrites package.json. Without this gate a stale binary
+# from an earlier build ships under a fresh version number and every user's
+# `wt update` silently installs old code (0.13.3/0.13.4 shipped 0.13.2 that way).
+# `strings` is used instead of running the binary so cross-compiled
+# linux/windows artifacts are checked on the release host too.
+verify_binary_version() {
+    local binary=$1
+    local version=$2
+
+    command -v strings &>/dev/null \
+        || error "strings(1) not found - cannot verify binary versions"
+
+    local embedded
+    embedded=$(strings -a "$binary" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -u)
+
+    # Membership, not equality: a dependency string may also look like a
+    # version. A binary built before the bump cannot contain the new version.
+    if ! grep -qxF "$version" <<< "$embedded"; then
+        error "$(basename "$(dirname "$(dirname "$binary")")") binary holds [${embedded//$'\n'/, }], expected $version - run scripts/build-npm.sh first"
+    fi
+}
+
+# ============================================================
 # Registry Check
 # ============================================================
 
@@ -116,11 +143,14 @@ for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
     else
         binary="$pkg_dir/bin/wt"
     fi
-    if [[ -f "$binary" && -s "$binary" ]]; then
-        publish_package "$pkg_dir" "$pkg_name" "$VERSION" "$DRY_RUN"
-    else
-        log "Skipping $pkg_name (no binary found)"
-    fi
+    # Fail closed: the main package pins every platform package at an exact
+    # version, so a missing binary means a release that is broken on that
+    # platform. Never skip past it.
+    [[ -f "$binary" && -s "$binary" ]] \
+        || error "$pkg_name has no binary at $binary - run scripts/build-npm.sh first"
+    verify_binary_version "$binary" "$VERSION"
+
+    publish_package "$pkg_dir" "$pkg_name" "$VERSION" "$DRY_RUN"
 done
 
 # Publish main package last
