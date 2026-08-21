@@ -304,7 +304,7 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 3. 与 target 仍有差异 → 跳过
 4. uncommitted > 0 → 报告并跳过（`Skipping {branch}: N uncommitted change(s)`）
 5. `--dry-run` → 仅打印 "Would clean (no diff from {target})"
-6. 真清：`remove_worktree(force=false)` + `delete_branch(force=false)` + 删 meta；如当前 cwd 在被清的 worktree 内，写 path_file 让 shell cd 回主仓库
+6. 真清：`remove_worktree(force=false)`（force=false 即「拒绝丢弃未提交改动」，见下）+ `delete_branch(force=false)` + 删 meta；如当前 cwd 在被清的 worktree 内，写 path_file 让 shell cd 回主仓库
 
 最终汇总 cleaned/skipped_dirty 计数。
 
@@ -317,6 +317,8 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 - stderr 为空时 fallback 到 stdout（merge 冲突信息走 stdout）
 
 适用于 `merge`、`commit`、`merge_continue` 等冲突相关命令。
+
+**禁在 `clean_git_error()` 里做 stderr 模式匹配**：用户可见的前置条件一律前移为 typed `Error` 变体 + 调用前检查（如 `WorktreeDirty`）。匹配 git 文案既随 git 版本漂移，又只能从路径里反解信息（分支名含 `/` 即失真）；`clean_git_error()` 只负责剥 `fatal: `/`error: ` 前缀。
 
 ---
 
@@ -370,6 +372,9 @@ pre_merge = ["pnpm test", "pnpm lint"]
 - **trunk 检测**：`origin/HEAD` > `main` > `master` > 默认 `"main"`
 - **submodule 自动 init**：`git worktree add` 留空 submodule 目录；`.gitmodules` 存在且 `submodules = true`（默认）时创建后执行 `git submodule update --init --recursive --jobs <submodule_jobs>`（默认 8），失败仅警告不中止（离线可选 submodule 不该杀掉创建）
 - **submodule 输出禁捕获**：git 把 submodule gitdir 存在 per-worktree 目录（`.git/worktrees/<wt>/modules/`），主仓 `.git/modules/` 不复用——每个新 worktree 全量联网重clone，嵌套仓可跑数十分钟。故 init 必须流式透传 git 输出（stdio 继承），静默即等价于「卡死」；失败信息只报退出码，诊断已在屏幕上
+- **submodule worktree 删除**：`git worktree remove` 对含 submodule 的 worktree 直接 fatal，`--force` 是唯一绕过口子。故删除一律传 `--force`，git 自带的「脏工作区」拦截随之失效——该拦截改由 wt 自己做（非 force 时 `git status --porcelain` 非空即拒），禁移除。`remove_worktree(force)` 的 `force` 自此只表示「允许丢弃未提交改动」，与传给 git 的 `--force` 解耦
+- **submodule 布局知识归 `git/submodule.rs`**：「gitdir 存在哪、双向链接怎么修、init 怎么跑」只此一处；`git/worktree.rs` 保持 worktree CRUD，需要时调 `submodule::gitdirs_in` / `submodule::repoint_all`
+- **submodule worktree 改名**：`git worktree move` 同样 fatal 且**不认 `--force`**，故含 submodule 时改走手动路径：`fs::rename` → `git worktree repair` → 逐个重指子模块的 `core.worktree` 与 `.git` gitfile（写绝对路径：分支名可含 `/`，改名会变目录深度，相对链接会断）。读写子模块 config 必须带 `--file`——普通 `git config` 会先 chdir 进那个已失效的 `core.worktree` 而 fatal。任一步失败必须 rename 回滚
 - **hooksPath 警告**：相对路径的 `core.hooksPath` 按各命令 CWD 解析，在 linked worktree 内静默失效——创建时检测并打印警告
 
 ---

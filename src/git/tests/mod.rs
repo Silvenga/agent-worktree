@@ -163,17 +163,6 @@ fn test_clean_git_error_error_prefix() {
 }
 
 #[test]
-fn test_clean_git_error_worktree_uncommitted() {
-    let msg = clean_git_error(
-        "fatal: '/Users/foo/.agent-worktree/workspaces/proj/branch' contains modified or untracked files, use --force to delete it",
-    );
-    assert_eq!(
-        msg,
-        "worktree 'branch' has uncommitted changes, use --force"
-    );
-}
-
-#[test]
 fn test_clean_git_error_no_prefix() {
     let msg = clean_git_error("some plain message");
     assert_eq!(msg, "some plain message");

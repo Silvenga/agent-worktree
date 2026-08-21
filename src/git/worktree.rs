@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{path_str, run, Error, Result};
+use super::{path_str, run, submodule, uncommitted_count_in, Error, Result};
 
 /// Create a new worktree
 pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<()> {
@@ -32,19 +32,63 @@ pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove a worktree
+/// Remove a worktree.
+///
+/// `--force` is passed unconditionally: `git worktree remove` refuses outright
+/// on any worktree containing submodules, and forcing is the only bypass git
+/// offers. That same flag also disables git's "modified or untracked files"
+/// guard, so the guard is re-implemented here — without it a non-force removal
+/// would silently discard work.
 pub fn remove_worktree(path: &Path, force: bool) -> Result<()> {
-    let mut args = vec!["worktree", "remove"];
-    if force {
-        args.push("--force");
+    if !force && uncommitted_count_in(path)? > 0 {
+        // The path, not its last component: branch names contain '/', so
+        // 'feat/x' would report as 'x'.
+        return Err(Error::WorktreeDirty(path.display().to_string()));
     }
-    args.push(path_str(path)?);
-    run(&args)
+
+    run(&["worktree", "remove", "--force", path_str(path)?])
 }
 
-/// Move a worktree to a new path
+/// Move a worktree to a new path.
+///
+/// `git worktree move` also dies on worktrees containing submodules, but there
+/// `--force` is no escape hatch, so that case is done by hand: rename the
+/// directory, let `git worktree repair` fix git's back-pointer, then re-point
+/// every submodule — their `core.worktree` and `.git` gitfile still describe
+/// the old location.
 pub fn move_worktree(old_path: &Path, new_path: &Path) -> Result<()> {
-    run(&["worktree", "move", path_str(old_path)?, path_str(new_path)?])
+    let submodules = submodule::gitdirs_in(old_path)?;
+    if submodules.is_empty() {
+        return run(&["worktree", "move", path_str(old_path)?, path_str(new_path)?]);
+    }
+
+    // Resolve before the rename: afterwards the old path is gone, and the
+    // recorded core.worktree values are relative to its resolved location.
+    let old_real = old_path.canonicalize()?;
+    std::fs::rename(old_path, new_path)?;
+
+    if let Err(e) = repair_moved_worktree(new_path, &old_real, &submodules) {
+        // Put the tree back where git still believes it lives.
+        std::fs::rename(new_path, old_path).ok();
+        run(&["-C", path_str(old_path)?, "worktree", "repair"]).ok();
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+/// Point git and every submodule at the worktree's new location.
+///
+/// Kept apart from `move_worktree` as its error boundary: every step here is
+/// fallible, and each failure needs the same rename-back rollback.
+fn repair_moved_worktree(new_path: &Path, old_real: &Path, submodules: &[PathBuf]) -> Result<()> {
+    let new_real = new_path.canonicalize()?;
+
+    // Run from inside the moved tree: repair then finds both ends of the
+    // broken link itself, so no path argument is needed.
+    run(&["-C", path_str(&new_real)?, "worktree", "repair"])?;
+
+    submodule::repoint_all(submodules, old_real, &new_real)
 }
 
 /// List all worktrees
@@ -93,39 +137,6 @@ pub fn parse_worktree_list(content: &str) -> Vec<WorktreeInfo> {
     }
 
     worktrees
-}
-
-/// Initialize submodules inside a worktree, cloning `jobs` of them in parallel.
-///
-/// `git worktree add` leaves submodule directories empty; without this,
-/// hooks and agents see an incomplete checkout. Git stores submodule gitdirs
-/// per-worktree (`.git/worktrees/<wt>/modules/`), so nothing is reused from the
-/// main repo — every submodule is re-cloned over the network, hence `jobs`.
-///
-/// Output is NOT captured: these clones are network-bound and can run for
-/// minutes, so git's progress must reach the terminal. Swallowing it makes
-/// "slow" indistinguishable from "hung". The failure path therefore reports
-/// only the exit status — the real diagnostics are already on screen.
-pub fn submodule_update_init(path: &Path, jobs: u32) -> Result<()> {
-    let status = Command::new("git")
-        .args([
-            "-C",
-            path_str(path)?,
-            "submodule",
-            "update",
-            "--init",
-            "--recursive",
-            "--jobs",
-            &jobs.to_string(),
-        ])
-        .status()?;
-
-    if !status.success() {
-        return Err(Error::Command(format!(
-            "git submodule update failed ({status})"
-        )));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone)]

@@ -282,6 +282,27 @@ fn test_remove_worktree_force() {
 }
 
 // ===========================================================================
+// Remove worktree refuses to discard uncommitted work
+// ===========================================================================
+#[test]
+fn test_remove_worktree_dirty_without_force() {
+    let dir = setup_test_repo();
+    let wt_path = dir.path().join("worktrees").join("dirty-test");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir.path(), || {
+        create_worktree(&wt_path, "dirty-branch", "main").unwrap();
+        std::fs::write(wt_path.join("uncommitted.txt"), "changes").unwrap();
+
+        // Removal always forces git past its submodule guard, so this guard
+        // lives in wt now — losing it would silently delete work.
+        let result = remove_worktree(&wt_path, false);
+        assert!(matches!(result, Err(Error::WorktreeDirty(_))));
+        assert!(wt_path.exists(), "worktree must be preserved");
+    });
+}
+
+// ===========================================================================
 // Delete branch with force
 // ===========================================================================
 #[test]

@@ -156,3 +156,52 @@ fn test_rm_dot_with_wrapper_works() {
     );
     assert!(!wt_path.exists(), "worktree should be removed");
 }
+
+/// `git worktree remove` refuses any worktree containing submodules — the bug
+/// that made every `wt rm` fail once `wt new` started auto-initialising them.
+#[test]
+fn test_rm_worktree_with_submodule() {
+    let (_dir, repo, home, wt_path) = new_worktree_with_submodule("rm-sub");
+    assert!(wt_path.join("sub").join("README.md").exists());
+
+    let output = Command::new(wt_binary())
+        .args(["rm", "rm-sub"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt rm failed");
+
+    assert!(
+        output.status.success(),
+        "wt rm must handle submodules: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!wt_path.exists(), "worktree should be removed");
+}
+
+/// Removal is forced internally to get past git's submodule guard, so the
+/// "don't discard uncommitted work" guard has to hold on its own.
+#[test]
+fn test_rm_dirty_submodule_worktree_is_refused() {
+    let (_dir, repo, home, wt_path) = new_worktree_with_submodule("rm-sub-dirty");
+
+    std::fs::write(wt_path.join("dirty.txt"), "uncommitted").unwrap();
+
+    let output = Command::new(wt_binary())
+        .args(["rm", "rm-sub-dirty"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt rm failed");
+
+    assert!(
+        !output.status.success(),
+        "dirty worktree must not be removed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("uncommitted changes"),
+        "stderr should explain the refusal: {stderr}"
+    );
+    assert!(wt_path.exists(), "worktree must be preserved");
+}

@@ -322,68 +322,9 @@ copy_files = [".env", ".env.link", ".env.dev"]
 // Submodule auto-init & hooksPath warning
 // ===========================================================================
 
-/// Create a sub-repo and register it as a submodule of `repo` at `sub/`.
-///
-/// Newer git blocks file-protocol submodule clones by default, and the
-/// restriction is NOT lifted by repo-local config (the clone subprocess
-/// doesn't read it). Any command that triggers a submodule clone — including
-/// the wt binary — must run with GIT_ALLOW_PROTOCOL=file.
-fn add_submodule(parent: &std::path::Path, repo: &std::path::Path) {
-    let sub_repo = parent.join("subrepo");
-    std::fs::create_dir_all(&sub_repo).unwrap();
-    setup_git_repo(&sub_repo);
-
-    let output = Command::new("git")
-        .args([
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            sub_repo.to_str().unwrap(),
-            "sub",
-        ])
-        .current_dir(repo)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git submodule add failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    Command::new("git")
-        .args(["commit", "-m", "add submodule"])
-        .current_dir(repo)
-        .output()
-        .unwrap();
-}
-
 #[test]
 fn test_new_auto_inits_submodules() {
-    let (dir, repo, home) = setup_worktree_test_env();
-    add_submodule(dir.path(), &repo);
-
-    let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .args([
-            "new",
-            "with-submodule",
-            "--path-file",
-            path_file.to_str().unwrap(),
-        ])
-        .current_dir(&repo)
-        .env("HOME", &home)
-        .env("GIT_ALLOW_PROTOCOL", "file")
-        .output()
-        .expect("wt new failed");
-    assert!(
-        output.status.success(),
-        "wt new failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let wt_path = read_path_file(&path_file);
-    let wt_root = std::path::Path::new(wt_path.trim());
+    let (_dir, _repo, _home, wt_root) = new_worktree_with_submodule("with-submodule");
     assert!(
         wt_root.join("sub").join("README.md").exists(),
         "submodule must be checked out in the new worktree"

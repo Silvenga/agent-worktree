@@ -5,11 +5,13 @@
 mod branch;
 mod ops;
 mod repo;
+mod submodule;
 mod worktree;
 
 pub use branch::*;
 pub use ops::*;
 pub use repo::*;
+pub use submodule::*;
 pub use worktree::*;
 
 use std::path::Path;
@@ -36,6 +38,9 @@ pub enum Error {
 
     #[error("worktree '{0}' already exists")]
     WorktreeExists(String),
+
+    #[error("worktree '{0}' has uncommitted changes, use --force")]
+    WorktreeDirty(String),
 
     #[error("branch '{0}' not found")]
     BranchNotFound(String),
@@ -67,19 +72,6 @@ fn clean_git_error(stderr: &str) -> String {
         .or_else(|| msg.strip_prefix("error: "))
         .unwrap_or(msg);
 
-    // Special case: worktree has uncommitted changes
-    // "'/path/to/branch' contains modified or untracked files, use --force to delete it"
-    if msg.contains("contains modified or untracked files") {
-        // Extract branch name from path (last component)
-        if let Some(start) = msg.find('\'') {
-            if let Some(end) = msg[start + 1..].find('\'') {
-                let path = &msg[start + 1..start + 1 + end];
-                let branch = path.rsplit('/').next().unwrap_or(path);
-                return format!("worktree '{branch}' has uncommitted changes, use --force");
-            }
-        }
-    }
-
     msg.to_string()
 }
 
@@ -90,6 +82,39 @@ fn run(args: &[&str]) -> Result<()> {
         return Err(Error::Command(extract_error(&output)));
     }
     Ok(())
+}
+
+/// Run a git command and return its trimmed stdout
+fn run_output(args: &[&str]) -> Result<String> {
+    let output = Command::new("git").args(args).output()?;
+    if !output.status.success() {
+        return Err(Error::Command(extract_error(&output)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Read one git config value; `None` when unset, empty, or unreadable.
+///
+/// `file` pins the lookup to an explicit config file. That is mandatory for a
+/// submodule's own config: a plain `git config` first chdirs into
+/// `core.worktree`, which during a repair is exactly the stale path being
+/// fixed, and dies there.
+fn config_value(file: Option<&Path>, key: &str) -> Option<String> {
+    let mut args = vec!["config"];
+    if let Some(file) = file {
+        args.push("--file");
+        args.push(file.to_str()?);
+    }
+    args.push("--get");
+    args.push(key);
+
+    let output = Command::new("git").args(&args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(test)]

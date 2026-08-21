@@ -106,3 +106,50 @@ fn test_mv_renames_worktree() {
             || stderr.contains("error")
     );
 }
+
+/// `git worktree move` refuses worktrees containing submodules and offers no
+/// --force, so wt moves them by hand — the submodule must survive intact.
+#[test]
+fn test_mv_worktree_with_submodule() {
+    let (_dir, repo, home, old_path) = new_worktree_with_submodule("mv-sub");
+
+    let output = Command::new(wt_binary())
+        .args(["mv", "mv-sub", "mv-sub-renamed"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt mv failed");
+    assert!(
+        output.status.success(),
+        "wt mv must handle submodules: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let new_path = old_path.with_file_name("mv-sub-renamed");
+    assert!(!old_path.exists(), "old worktree path should be gone");
+    assert!(new_path.join("sub").join("README.md").exists());
+
+    // The submodule's gitdir link and core.worktree must both point at the
+    // new location, or every git command inside it dies.
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(new_path.join("sub"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "submodule must stay usable after the move: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new("git")
+        .args(["submodule", "status"])
+        .current_dir(&new_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "superproject must still see the submodule: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

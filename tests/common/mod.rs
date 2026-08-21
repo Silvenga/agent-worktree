@@ -98,3 +98,65 @@ default_base = "main"
 
     (dir, repo, home)
 }
+
+/// Create a sub-repo and register it as a submodule of `repo` at `sub/`.
+///
+/// Newer git blocks file-protocol submodule clones by default, and the
+/// restriction is NOT lifted by repo-local config (the clone subprocess
+/// doesn't read it). Any command that triggers a submodule clone — including
+/// the wt binary — must run with GIT_ALLOW_PROTOCOL=file.
+pub fn add_submodule(parent: &Path, repo: &Path) {
+    let sub_repo = parent.join("subrepo");
+    std::fs::create_dir_all(&sub_repo).unwrap();
+    setup_git_repo(&sub_repo);
+
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            sub_repo.to_str().unwrap(),
+            "sub",
+        ])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git submodule add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    Command::new("git")
+        .args(["commit", "-m", "add submodule"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+}
+
+/// A worktree whose checkout has an initialised submodule at `sub/`.
+///
+/// Returns `(tempdir, repo, home, worktree path)`; the tempdir binding must
+/// stay alive for the duration of the test.
+pub fn new_worktree_with_submodule(branch: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let (dir, repo, home) = setup_worktree_test_env();
+    add_submodule(dir.path(), &repo);
+
+    let path_file = create_path_file(dir.path());
+    let output = Command::new(wt_binary())
+        .args(["new", branch, "--path-file", path_file.to_str().unwrap()])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("GIT_ALLOW_PROTOCOL", "file")
+        .output()
+        .expect("wt new failed");
+    assert!(
+        output.status.success(),
+        "wt new failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let worktree = PathBuf::from(read_path_file(&path_file).trim());
+    (dir, repo, home, worktree)
+}
