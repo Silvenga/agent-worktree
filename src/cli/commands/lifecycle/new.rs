@@ -84,8 +84,11 @@ pub fn create_worktree_core(
     // agents see a complete checkout. Failure warns instead of aborting —
     // e.g. an offline optional submodule shouldn't kill worktree creation.
     if config.submodules && wt_path.join(".gitmodules").exists() {
-        eprintln!("Initializing submodules...");
-        if let Err(e) = git::submodule_update_init(&wt_path) {
+        // Each worktree re-clones every submodule over the network, so this
+        // can run for minutes. Say so up front, then let git's own progress
+        // stream through — silence here reads as a hang.
+        eprintln!("Initializing submodules (network clone, may take a while)...");
+        if let Err(e) = git::submodule_update_init(&wt_path, config.submodule_jobs) {
             eprintln!("Warning: submodule init failed: {e}");
             eprintln!("Run 'git submodule update --init --recursive' in the worktree manually.");
         }

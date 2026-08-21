@@ -64,6 +64,14 @@ pub struct GeneralConfig {
     /// Auto-init submodules in new worktrees (`git worktree add` leaves them empty)
     #[serde(default = "default_true")]
     pub submodules: bool,
+
+    /// Parallel clone lanes for submodule init.
+    ///
+    /// Every new worktree re-clones every submodule over the network (git keeps
+    /// submodule gitdirs per-worktree), so deep trees are network-bound. Passed
+    /// straight to `git submodule update --jobs`; git validates the value.
+    #[serde(default = "default_submodule_jobs")]
+    pub submodule_jobs: u32,
 }
 
 // Manual impl: derived Default would give submodules=false, diverging from
@@ -75,12 +83,19 @@ impl Default for GeneralConfig {
             sync_strategy: SyncStrategy::default(),
             copy_files: Vec::new(),
             submodules: true,
+            submodule_jobs: default_submodule_jobs(),
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// 8 lanes: enough to hide per-clone latency on a deep submodule tree without
+/// hammering the remote with an unbounded fan-out.
+fn default_submodule_jobs() -> u32 {
+    8
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -92,6 +107,8 @@ pub struct ProjectGeneralConfig {
     pub sync_strategy: Option<SyncStrategy>,
 
     pub submodules: Option<bool>,
+
+    pub submodule_jobs: Option<u32>,
 
     #[serde(default)]
     pub copy_files: Vec<String>,
@@ -143,6 +160,7 @@ pub struct Config {
     pub sync_strategy: SyncStrategy,
     pub copy_files: Vec<String>,
     pub submodules: bool,
+    pub submodule_jobs: u32,
     pub hooks: HooksConfig,
     pub trunk: Option<String>,
 }
@@ -172,6 +190,10 @@ impl Config {
             .general
             .submodules
             .unwrap_or(global.general.submodules);
+        let submodule_jobs = project
+            .general
+            .submodule_jobs
+            .unwrap_or(global.general.submodule_jobs);
         let mut copy_files = global.general.copy_files;
         copy_files.extend(project.general.copy_files);
 
@@ -188,6 +210,7 @@ impl Config {
             sync_strategy,
             copy_files,
             submodules,
+            submodule_jobs,
             hooks,
             trunk: project.general.trunk,
         })

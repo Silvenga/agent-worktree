@@ -329,6 +329,7 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 merge_strategy = "merge"                # squash | merge（默认）
 sync_strategy = "merge"                 # rebase | merge（默认）
 submodules = true                       # 新 worktree 自动 init submodule（默认 true）
+submodule_jobs = 8                      # submodule init 并行 clone 数（默认 8）
 # 从主仓库复制到新 worktree 的文件（通常是被 gitignore 但开发必需的），支持 glob
 copy_files = ["*.secret.*"]
 
@@ -342,7 +343,7 @@ post_merge = []
 
 - `copy_files`：global + project **追加**合并
 - `hooks`：project 非空时**完全替代** global（不追加）
-- `merge_strategy` / `sync_strategy` / `submodules`：project 非空时**覆盖** global（`Option` 语义）
+- `merge_strategy` / `sync_strategy` / `submodules` / `submodule_jobs`：project 非空时**覆盖** global（`Option` 语义）
 - `trunk`：仅 project 级别配置
 
 ### 项目配置 `.agent-worktree.toml`
@@ -367,7 +368,8 @@ pre_merge = ["pnpm test", "pnpm lint"]
 - **hook CWD**：`pre_merge`/`post_merge` 一律 worktree 根；`post_create` 在新 worktree 内
 - **hook 环境变量**：所有 hook 注入 `WT_MAIN_REPO`（主仓库根）/`WT_WORKTREE`（worktree 路径）/`WT_BRANCH`（分支名）/`WT_BASE_BRANCH`（base 分支：new=创建来源，merge=合并目标）；叠加于继承环境。让 hook 可移植引用路径，如 `post_create = ['ln -s "$WT_MAIN_REPO/node_modules" node_modules']` 软链替代 `copy_files` 复制。`copy_files` 已在支持的文件系统上使用写时复制，故该软链技巧主要用于不支持 CoW 的文件系统
 - **trunk 检测**：`origin/HEAD` > `main` > `master` > 默认 `"main"`
-- **submodule 自动 init**：`git worktree add` 留空 submodule 目录；`.gitmodules` 存在且 `submodules = true`（默认）时创建后执行 `git submodule update --init --recursive`，失败仅警告不中止（离线可选 submodule 不该杀掉创建）
+- **submodule 自动 init**：`git worktree add` 留空 submodule 目录；`.gitmodules` 存在且 `submodules = true`（默认）时创建后执行 `git submodule update --init --recursive --jobs <submodule_jobs>`（默认 8），失败仅警告不中止（离线可选 submodule 不该杀掉创建）
+- **submodule 输出禁捕获**：git 把 submodule gitdir 存在 per-worktree 目录（`.git/worktrees/<wt>/modules/`），主仓 `.git/modules/` 不复用——每个新 worktree 全量联网重clone，嵌套仓可跑数十分钟。故 init 必须流式透传 git 输出（stdio 继承），静默即等价于「卡死」；失败信息只报退出码，诊断已在屏幕上
 - **hooksPath 警告**：相对路径的 `core.hooksPath` 按各命令 CWD 解析，在 linked worktree 内静默失效——创建时检测并打印警告
 
 ---

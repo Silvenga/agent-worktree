@@ -180,6 +180,7 @@ merge_strategy = "merge"   # squash | merge
 sync_strategy = "merge"    # rebase | merge
 copy_files = [".env", ".env.*"]  # gitignore 风格的文件模式
 submodules = true          # 新 worktree 自动 init submodule
+submodule_jobs = 8         # submodule init 的并行 clone 数
 
 [hooks]
 post_create = ["pnpm install"]
@@ -187,23 +188,23 @@ pre_merge = ["pnpm test", "pnpm lint"]
 post_merge = []
 ```
 
-> **`copy_files` 约束** — gitignore 风格 pattern 必须停留在 repo 内：
-> 拒绝 `/` 开头（绝对路径）和 `..` 段。符号链接一律跳过——链接本身与
-> 目标内容均不复制（共享路径请改用 `post_create` hook 软链）。
-> 文件系统支持时（如 BTRFS、ZFS、XFS、APFS、ReFS）复制走写时复制
-> （reflink），否则回退普通拷贝。
+> **`copy_files`** — gitignore 风格 pattern，且必须停留在 repo 内：
+> 拒绝 `/` 开头和 `..` 段。符号链接条目一律跳过。文件系统支持时走写时复制，
+> 故 `copy_files = ["node_modules"]` 在这类文件系统上近乎零成本。
 >
 > **Hook 信任边界** — hooks 通过 `sh -c`（Windows `cmd /C`）执行，
 > 无沙箱无超时。把 `.agent-worktree.toml` 当 committed shell script
 > 对待：只跑你愿意 `bash` 的 repo 的 hooks。
 >
-> **Hook CWD** — `pre_merge` 与 `post_merge` 一律 worktree 根；
-> `post_create` 在新 worktree 内。
+> **Hook CWD** — 所有 hook 一律以 worktree 根为工作目录。
 >
-> **Submodule 与 git hooks** — `git worktree add` 会留下空的 submodule
-> 目录，故存在 `.gitmodules` 时新 worktree 自动执行
-> `git submodule update --init --recursive`（`submodules = false` 可关）。
-> 相对路径的 `core.hooksPath` 在 worktree 内无法解析，创建时检测到会打印警告。
+> **Submodule** — `git worktree add` 会留下空的 submodule 目录，故存在
+> `.gitmodules` 时新 worktree 自动执行 `git submodule update --init --recursive`。
+> git 把 submodule gitdir 存在 per-worktree 目录，主仓不复用：每个 worktree
+> 都要联网重新 clone 全部 submodule，嵌套树需以分钟计。`submodule_jobs`
+> （默认 `8`）控制并行 clone 数；设 `submodules = false` 可跳过，改为手动 init。
+>
+> **`core.hooksPath`** — 相对路径在 worktree 内无法解析，创建时检测到会打印警告。
 >
 > **Hook 环境变量** — 每个 hook 都注入以下变量，脚本可引用路径而不硬编码：
 >
@@ -214,13 +215,10 @@ post_merge = []
 > | `WT_BRANCH` | worktree 分支名 |
 > | `WT_BASE_BRANCH` | base 分支（`new` 为创建来源，`merge` 为合并目标） |
 >
-> 据此，`post_create` 可软链替代 `copy_files`——只共享、不复制依赖等重目录。
-> `copy_files` 在支持写时复制的文件系统上已近零成本，软链技巧主要用于
-> 不支持 CoW 的文件系统：
+> 不支持写时复制的文件系统上，重目录用软链优于 `copy_files`：
 >
 > ```toml
 > [hooks]
-> # 软链替代复制：零磁盘占用，零复制耗时。
 > post_create = ['ln -s "$WT_MAIN_REPO/node_modules" node_modules']
 > ```
 
@@ -234,6 +232,7 @@ trunk = "main"  # trunk 分支（省略则自动检测）
 merge_strategy = "merge"  # 覆盖全局合并策略
 sync_strategy = "merge"   # 覆盖全局同步策略
 submodules = false        # 覆盖全局 submodule 自动 init
+submodule_jobs = 16       # 覆盖全局 submodule 并行 clone 数
 copy_files = ["*.secret.*"]  # 追加到全局 copy_files
 
 [hooks]

@@ -390,6 +390,36 @@ fn test_new_auto_inits_submodules() {
     );
 }
 
+/// Submodule clones are network-bound and can run for minutes. Git's progress
+/// must reach the caller's terminal, or a slow clone is indistinguishable from
+/// a hang — the exact bug this guards against.
+#[test]
+fn test_new_streams_submodule_progress() {
+    let (dir, repo, home) = setup_worktree_test_env();
+    add_submodule(dir.path(), &repo);
+
+    let path_file = create_path_file(dir.path());
+    let output = Command::new(wt_binary())
+        .args([
+            "new",
+            "streamed",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("GIT_ALLOW_PROTOCOL", "file")
+        .output()
+        .expect("wt new failed");
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Cloning into"),
+        "git submodule output must not be swallowed, got: {stderr}"
+    );
+}
+
 #[test]
 fn test_new_submodules_disabled_by_project_config() {
     let (dir, repo, home) = setup_worktree_test_env();

@@ -186,6 +186,7 @@ merge_strategy = "merge"   # squash | merge
 sync_strategy = "merge"    # rebase | merge
 copy_files = [".env", ".env.*"]  # Gitignore-style patterns for files to copy
 submodules = true          # Auto-init submodules in new worktrees
+submodule_jobs = 8         # Parallel clone lanes for submodule init
 
 [hooks]
 post_create = ["pnpm install"]
@@ -193,25 +194,26 @@ pre_merge = ["pnpm test", "pnpm lint"]
 post_merge = []
 ```
 
-> **`copy_files` constraints** — patterns are gitignore-style and must stay
-> inside the repo: leading `/` (absolute paths) and `..` traversal are
-> rejected. Symlink entries are skipped entirely — neither the link nor its
-> target is copied (share paths via a `post_create` hook instead). Files are
-> copied using Reflink where the filesystem supports it (e.g., BTRFS, ZFS,
-> XFS, APFS, ReFS, etc.), falling back to a plain copy otherwise.
+> **`copy_files`** — gitignore-style patterns, and they must stay inside the
+> repo: leading `/` and `..` are rejected. Symlink entries are skipped
+> entirely. Copies use copy-on-write where the filesystem supports it, so even
+> `copy_files = ["node_modules"]` is near-free there.
 >
 > **Hook trust boundary** — hooks run via `sh -c` (or `cmd /C` on Windows)
 > with no sandboxing or timeout. Treat `.agent-worktree.toml` like any
 > committed shell script: only run repos whose hooks you would `bash` directly.
 >
-> **Hook CWD** — `pre_merge` and `post_merge` always run with the worktree
-> root as the working directory. `post_create` runs in the new worktree.
+> **Hook CWD** — every hook runs with the worktree root as its working directory.
 >
-> **Submodules & git hooks** — `git worktree add` leaves submodule
-> directories empty, so new worktrees auto-run
-> `git submodule update --init --recursive` when `.gitmodules` exists
-> (disable with `submodules = false`). A relative `core.hooksPath` does not
-> resolve inside worktrees; creation prints a warning when one is detected.
+> **Submodules** — `git worktree add` leaves submodule directories empty, so
+> new worktrees auto-run `git submodule update --init --recursive` when
+> `.gitmodules` exists. Git keeps submodule gitdirs per worktree, so every
+> worktree re-clones every submodule over the network — expect minutes on deep
+> trees. `submodule_jobs` (default `8`) sets the clone parallelism; set
+> `submodules = false` to skip it and init by hand.
+>
+> **`core.hooksPath`** — a relative path does not resolve inside worktrees;
+> creation prints a warning when one is detected.
 >
 > **Hook environment** — every hook receives these variables, so scripts can
 > reference paths without hardcoding them:
@@ -223,16 +225,11 @@ post_merge = []
 > | `WT_BRANCH` | Worktree's branch name |
 > | `WT_BASE_BRANCH` | Base branch (creation source for `new`, merge target for `merge`) |
 >
-> This makes `post_create` a cheaper alternative to `copy_files` when you only
-> want to share — not duplicate — heavy directories like dependencies.
-> `copy_files` already uses copy-on-write where the filesystem supports it
-> (btrfs/XFS reflink, APFS clonefile, ReFS block cloning), so a plain
-> `copy_files = ["node_modules"]` is near-free on those filesystems; the
-> symlink trick is mainly useful on filesystems without CoW:
+> On filesystems without copy-on-write, symlinking beats `copy_files` for
+> heavy directories:
 >
 > ```toml
 > [hooks]
-> # Symlink instead of copying: no disk cost, no copy time.
 > post_create = ['ln -s "$WT_MAIN_REPO/node_modules" node_modules']
 > ```
 
@@ -246,6 +243,7 @@ trunk = "main"  # Trunk branch (auto-detected if omitted)
 merge_strategy = "merge"  # Override global merge strategy
 sync_strategy = "merge"   # Override global sync strategy
 submodules = false        # Override global submodule auto-init
+submodule_jobs = 16       # Override global submodule clone parallelism
 copy_files = ["*.secret.*"]  # Appended to global copy_files
 
 [hooks]

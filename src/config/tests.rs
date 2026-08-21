@@ -178,6 +178,7 @@ fn test_global_config_serialize() {
             sync_strategy: SyncStrategy::default(),
             copy_files: vec![".env".to_string()],
             submodules: true,
+            submodule_jobs: 8,
         },
         hooks: HooksConfig {
             post_create: vec!["npm install".to_string()],
@@ -249,6 +250,7 @@ fn test_project_config_serialize() {
             merge_strategy: None,
             sync_strategy: None,
             submodules: None,
+            submodule_jobs: None,
             copy_files: vec![".env.local".to_string()],
         },
         hooks: HooksConfig::default(),
@@ -287,6 +289,37 @@ submodules = false
 
     let config: ProjectConfig = toml::from_str("").unwrap();
     assert!(config.general.submodules.is_none());
+}
+
+#[test]
+fn test_submodule_jobs_default_is_eight() {
+    assert_eq!(GeneralConfig::default().submodule_jobs, 8);
+    // Missing key in TOML must also resolve to 8 (serde default).
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.general.submodule_jobs, 8);
+}
+
+#[test]
+fn test_submodule_jobs_global_override() {
+    let toml = r#"
+[general]
+submodule_jobs = 1
+"#;
+    let config: GlobalConfig = toml::from_str(toml).unwrap();
+    assert_eq!(config.general.submodule_jobs, 1);
+}
+
+#[test]
+fn test_submodule_jobs_project_override() {
+    let toml = r#"
+[general]
+submodule_jobs = 16
+"#;
+    let config: ProjectConfig = toml::from_str(toml).unwrap();
+    assert_eq!(config.general.submodule_jobs, Some(16));
+
+    let config: ProjectConfig = toml::from_str("").unwrap();
+    assert!(config.general.submodule_jobs.is_none());
 }
 
 #[test]

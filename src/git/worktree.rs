@@ -95,12 +95,19 @@ pub fn parse_worktree_list(content: &str) -> Vec<WorktreeInfo> {
     worktrees
 }
 
-/// Initialize submodules inside a worktree.
+/// Initialize submodules inside a worktree, cloning `jobs` of them in parallel.
 ///
 /// `git worktree add` leaves submodule directories empty; without this,
-/// hooks and agents see an incomplete checkout.
-pub fn submodule_update_init(path: &Path) -> Result<()> {
-    let output = Command::new("git")
+/// hooks and agents see an incomplete checkout. Git stores submodule gitdirs
+/// per-worktree (`.git/worktrees/<wt>/modules/`), so nothing is reused from the
+/// main repo — every submodule is re-cloned over the network, hence `jobs`.
+///
+/// Output is NOT captured: these clones are network-bound and can run for
+/// minutes, so git's progress must reach the terminal. Swallowing it makes
+/// "slow" indistinguishable from "hung". The failure path therefore reports
+/// only the exit status — the real diagnostics are already on screen.
+pub fn submodule_update_init(path: &Path, jobs: u32) -> Result<()> {
+    let status = Command::new("git")
         .args([
             "-C",
             path_str(path)?,
@@ -108,11 +115,15 @@ pub fn submodule_update_init(path: &Path) -> Result<()> {
             "update",
             "--init",
             "--recursive",
+            "--jobs",
+            &jobs.to_string(),
         ])
-        .output()?;
+        .status()?;
 
-    if !output.status.success() {
-        return Err(Error::Command(super::extract_error(&output)));
+    if !status.success() {
+        return Err(Error::Command(format!(
+            "git submodule update failed ({status})"
+        )));
     }
     Ok(())
 }
