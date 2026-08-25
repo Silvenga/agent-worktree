@@ -31,9 +31,13 @@ pub fn meta_path_with_fallback(wt_dir: &Path, branch: &str) -> PathBuf {
 }
 
 /// Remove meta file (try both new and legacy names).
-pub fn remove_meta(wt_dir: &Path, branch: &str) {
-    std::fs::remove_file(meta_path(wt_dir, branch)).ok();
-    std::fs::remove_file(wt_dir.join(format!("{branch}.status.toml"))).ok();
+///
+/// Reports whether either file was actually there: callers cleaning up after
+/// a vanished worktree use it to tell "removed something" from "nothing here".
+pub fn remove_meta(wt_dir: &Path, branch: &str) -> bool {
+    let new = std::fs::remove_file(meta_path(wt_dir, branch)).is_ok();
+    let legacy = std::fs::remove_file(wt_dir.join(format!("{branch}.status.toml"))).is_ok();
+    new || legacy
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -253,10 +257,12 @@ created_at = "2024-01-15T10:30:00Z"
         std::fs::write(&new, "x").unwrap();
         std::fs::write(&legacy, "x").unwrap();
 
-        remove_meta(dir.path(), "br");
+        assert!(remove_meta(dir.path(), "br"));
 
         assert!(!new.exists());
         assert!(!legacy.exists());
+        // Second call has nothing left to remove.
+        assert!(!remove_meta(dir.path(), "br"));
     }
 
     // -----------------------------------------------------------------------

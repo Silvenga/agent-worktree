@@ -205,3 +205,66 @@ fn test_rm_dirty_submodule_worktree_is_refused() {
     );
     assert!(wt_path.exists(), "worktree must be preserved");
 }
+
+#[test]
+fn test_rm_stale_dir_is_refused_without_force() {
+    let (_dir, repo, home, worktree) = orphaned_worktree_dir("stale-rm");
+
+    let output = Command::new(wt_binary())
+        .args(["rm", "stale-rm"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt rm failed");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--force"),
+        "expected --force guidance, got: {stderr}"
+    );
+    assert!(worktree.exists(), "refused removal must keep the directory");
+}
+
+#[test]
+fn test_rm_force_removes_stale_dir() {
+    let (_dir, repo, home, worktree) = orphaned_worktree_dir("stale-force");
+
+    let output = Command::new(wt_binary())
+        .args(["rm", "stale-force", "--force"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt rm failed");
+
+    assert!(
+        output.status.success(),
+        "wt rm --force failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!worktree.exists(), "stale directory should be gone");
+
+    let meta = worktree.parent().unwrap().join("stale-force.toml");
+    assert!(!meta.exists(), "stale metadata should be gone");
+}
+
+#[test]
+fn test_rm_clears_metadata_when_directory_vanished() {
+    let (_dir, repo, home, worktree) = orphaned_worktree_dir("stale-meta");
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let output = Command::new(wt_binary())
+        .args(["rm", "stale-meta"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt rm failed");
+
+    assert!(
+        output.status.success(),
+        "wt rm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let meta = worktree.parent().unwrap().join("stale-meta.toml");
+    assert!(!meta.exists(), "stale metadata should be gone");
+}

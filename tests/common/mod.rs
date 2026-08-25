@@ -143,20 +143,72 @@ pub fn new_worktree_with_submodule(branch: &str) -> (tempfile::TempDir, PathBuf,
     let (dir, repo, home) = setup_worktree_test_env();
     add_submodule(dir.path(), &repo);
 
-    let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
+    let worktree = new_worktree(dir.path(), &repo, &home, branch, true);
+    (dir, repo, home, worktree)
+}
+
+/// Run `wt new <branch>` in `repo` and return the created worktree path.
+///
+/// `allow_file_protocol` is required whenever the repo has submodules: git
+/// refuses the `file` transport in the clone subprocess without it.
+pub fn new_worktree(
+    tmp: &Path,
+    repo: &Path,
+    home: &Path,
+    branch: &str,
+    allow_file_protocol: bool,
+) -> PathBuf {
+    let path_file = create_path_file(tmp);
+    let mut command = Command::new(wt_binary());
+    command
         .args(["new", branch, "--path-file", path_file.to_str().unwrap()])
-        .current_dir(&repo)
-        .env("HOME", &home)
-        .env("GIT_ALLOW_PROTOCOL", "file")
-        .output()
-        .expect("wt new failed");
+        .current_dir(repo)
+        .env("HOME", home);
+    if allow_file_protocol {
+        command.env("GIT_ALLOW_PROTOCOL", "file");
+    }
+
+    let output = command.output().expect("wt new failed");
     assert!(
         output.status.success(),
         "wt new failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let worktree = PathBuf::from(read_path_file(&path_file).trim());
+    PathBuf::from(read_path_file(&path_file).trim())
+}
+
+/// A worktree directory git has lost all record of.
+///
+/// Reproduces the real-world trigger: the repository is re-created under the
+/// same path, so its administrative worktree entries are gone while the pool
+/// directory — keyed on that unchanged path — survives from the old repo.
+///
+/// Returns `(tempdir, repo, home, orphaned path)`; keep the tempdir alive.
+pub fn orphaned_worktree_dir(branch: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    let (dir, repo, home) = setup_worktree_test_env();
+    let worktree = new_worktree(dir.path(), &repo, &home, branch, false);
+
+    std::fs::remove_dir_all(repo.join(".git/worktrees")).unwrap();
+    Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    assert!(worktree.exists(), "orphan setup lost the directory");
     (dir, repo, home, worktree)
+}
+
+/// Local branch names in `repo`.
+pub fn local_branches(repo: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect()
 }

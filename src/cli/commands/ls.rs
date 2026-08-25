@@ -3,7 +3,8 @@
 // ===========================================================================
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 
@@ -92,6 +93,18 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
 
         // Sort newest-first; rows without meta sink to the bottom (None < Some).
         rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+        // Directories git no longer recognizes are invisible everywhere else,
+        // yet they still hold the name against `wt new`. Say they are there.
+        // Only outside --json: the envelope describes worktrees, not debris.
+        if !args.json {
+            for name in stale_dirs(&wt_dir, &managed) {
+                eprintln!(
+                    "Warning: stale directory '{name}' is not a worktree; \
+                     run 'wt rm --force {name}' to discard it."
+                );
+            }
+        }
     }
 
     if args.json {
@@ -113,6 +126,33 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
 
     print_table(&rows, args.long);
     Ok(())
+}
+
+/// Names in the workspace dir that occupy a worktree path git doesn't know.
+///
+/// Read failures stay silent: this is an advisory pass over `wt ls`, and a
+/// listing must not fail because the pool directory was unreadable.
+fn stale_dirs(wt_dir: &Path, managed: &[&git::WorktreeInfo]) -> Vec<String> {
+    // First component only: a slashed branch 'feat/x' makes 'feat' a live
+    // namespace level, and read_dir sees exactly that level.
+    let live: HashSet<&OsStr> = managed
+        .iter()
+        .filter_map(|wt| wt.path.strip_prefix(wt_dir).ok())
+        .filter_map(|rel| rel.components().next())
+        .map(|c| c.as_os_str())
+        .collect();
+
+    let Ok(entries) = std::fs::read_dir(wt_dir) else {
+        return Vec::new();
+    };
+
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir() && !live.contains(e.file_name().as_os_str()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
 }
 
 #[derive(Serialize)]

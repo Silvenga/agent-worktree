@@ -11,6 +11,17 @@ use super::{path_str, run, submodule, uncommitted_count_in, Error, Result};
 pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<()> {
     let path_str = path_str(path)?;
 
+    // git blocks `worktree add` here with a bare "already exists" and never
+    // says the real obstacle: the directory is not one of its worktrees. The
+    // workspace id is derived from the path, so a new repository at the same
+    // path inherits the old tree. Name it.
+    if path.exists() && !is_registered_worktree(path)? {
+        return Err(Error::WorktreeStale {
+            branch: branch.to_string(),
+            path: path.display().to_string(),
+        });
+    }
+
     // Check if branch already exists
     if super::branch_exists(branch)? {
         // Branch exists - check if it already has a worktree
@@ -26,10 +37,38 @@ pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<()> {
         run(&["worktree", "add", path_str, branch])?;
     } else {
         // Branch doesn't exist - create it from base
-        run(&["worktree", "add", "-b", branch, path_str, base])?;
+        //
+        // `worktree add -b` creates the branch before it validates the target
+        // path, so any failure past that point leaks a branch no worktree
+        // references — and the leak makes the *next* attempt take the
+        // "branch exists" path above, reporting a different error each run.
+        if let Err(e) = run(&["worktree", "add", "-b", branch, path_str, base]) {
+            let _ = super::delete_branch(branch, true);
+            return Err(e);
+        }
     }
 
     Ok(())
+}
+
+/// Whether git currently tracks `path` as a worktree of this repository.
+///
+/// Paths are compared resolved: git reports resolved paths, while ours are
+/// built from a configured root that may contain symlinks.
+pub fn is_registered_worktree(path: &Path) -> Result<bool> {
+    let target = super::real_path(path);
+    Ok(list_worktrees()?
+        .iter()
+        .any(|wt| super::real_path(&wt.path) == target))
+}
+
+/// Delete a directory that occupies a worktree path git has no record of.
+///
+/// `git worktree remove` refuses outright on such a path, so removal is done
+/// by hand; the prune afterwards clears any admin entry left pointing at it.
+pub fn remove_stale_worktree_dir(path: &Path) -> Result<()> {
+    std::fs::remove_dir_all(path)?;
+    run(&["worktree", "prune"])
 }
 
 /// Remove a worktree.

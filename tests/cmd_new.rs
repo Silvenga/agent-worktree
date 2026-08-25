@@ -435,3 +435,47 @@ fn test_new_warns_on_relative_hooks_path() {
         "relative hooksPath must be warned about: {stderr}"
     );
 }
+
+#[test]
+fn test_new_reports_stale_dir_instead_of_git_error() {
+    let (_dir, repo, home, worktree) = orphaned_worktree_dir("stale-new");
+
+    let output = Command::new(wt_binary())
+        .args(["new", "stale-new"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt new failed");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("wt rm --force stale-new"),
+        "expected recovery hint, got: {stderr}"
+    );
+    assert!(worktree.exists(), "the stale directory must be left alone");
+}
+
+#[test]
+fn test_new_does_not_leak_branch_when_creation_fails() {
+    let (_dir, repo, home, _worktree) = orphaned_worktree_dir("stale-leak");
+    assert!(!local_branches(&repo).contains(&"stale-leak".to_string()));
+
+    for _ in 0..2 {
+        let output = Command::new(wt_binary())
+            .args(["new", "stale-leak"])
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .output()
+            .expect("wt new failed");
+        assert!(!output.status.success());
+    }
+
+    // A leaked branch would also change the error on the second attempt,
+    // reporting "already exists" instead of naming the real obstacle.
+    assert!(
+        !local_branches(&repo).contains(&"stale-leak".to_string()),
+        "failed creation must not leave the branch behind: {:?}",
+        local_branches(&repo)
+    );
+}

@@ -160,3 +160,59 @@ fn test_ls_with_multiple_worktrees() {
 
     assert!(combined.contains("multi-ls") || combined.contains("BRANCH"));
 }
+
+#[test]
+fn test_ls_warns_about_stale_dir() {
+    let (_dir, repo, home, _worktree) = orphaned_worktree_dir("stale-ls");
+
+    let output = Command::new(wt_binary())
+        .arg("ls")
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt ls failed");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stale-ls") && stderr.contains("wt rm --force"),
+        "expected stale-dir warning, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_ls_json_stdout_stays_clean_with_stale_dir() {
+    let (_dir, repo, home, _worktree) = orphaned_worktree_dir("stale-json");
+
+    let output = Command::new(wt_binary())
+        .args(["ls", "--json"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt ls failed");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
+    assert_eq!(parsed["worktrees"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_ls_does_not_warn_about_live_worktree() {
+    let (dir, repo, home) = setup_worktree_test_env();
+    new_worktree(dir.path(), &repo, &home, "live-ls", false);
+
+    let output = Command::new(wt_binary())
+        .arg("ls")
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("wt ls failed");
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("stale directory"),
+        "a registered worktree must never be reported as stale: {stderr}"
+    );
+}

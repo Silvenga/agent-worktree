@@ -11,6 +11,7 @@ use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
 use crate::git;
+use crate::meta;
 
 #[derive(Args)]
 pub struct RmArgs {
@@ -38,8 +39,19 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
 
     let wt_path = wt_dir.join(&branch);
 
-    if !wt_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(branch)));
+    // Stale = a directory git has no record of; see `remove_stale_worktree_dir`.
+    let registered = git::is_registered_worktree(&wt_path)?;
+    if !registered && !wt_path.exists() {
+        // The tree is gone; its metadata may not be. Metadata is what `wt ls`
+        // and completions read, so it is the only witness that the name ever
+        // existed — nothing left to clear means nothing was ever here.
+        if !meta::remove_meta(&wt_dir, &branch) {
+            return Err(Error::Git(git::Error::WorktreeNotFound(branch)));
+        }
+        std::env::set_current_dir(&main_path).ok();
+        let _ = git::delete_branch(&branch, args.force);
+        eprintln!("Removed stale metadata: {branch}");
+        return Ok(());
     }
 
     // Check if we're inside the worktree being removed
@@ -56,8 +68,20 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
         ));
     }
 
-    // Remove worktree
-    git::remove_worktree(&wt_path, args.force)?;
+    if registered {
+        git::remove_worktree(&wt_path, args.force)?;
+    } else {
+        // A stale tree can hold work no one can account for — git can't say
+        // whether it is dirty, because it doesn't recognize it at all. So it
+        // is never removed implicitly; --force is the user vouching for it.
+        if !args.force {
+            return Err(Error::Git(git::Error::WorktreeStale {
+                branch,
+                path: wt_path.display().to_string(),
+            }));
+        }
+        git::remove_stale_worktree_dir(&wt_path)?;
+    }
 
     // Switch to main repo before deleting branch (avoid "not in repo" error)
     std::env::set_current_dir(&main_path).ok();
@@ -66,7 +90,7 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     let _ = git::delete_branch(&branch, args.force);
 
     // Remove metadata
-    crate::meta::remove_meta(&wt_dir, &branch);
+    meta::remove_meta(&wt_dir, &branch);
 
     eprintln!("Removed worktree: {branch}");
 

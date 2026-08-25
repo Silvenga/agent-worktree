@@ -14,10 +14,18 @@ pub use repo::*;
 pub use submodule::*;
 pub use worktree::*;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Resolve a path for comparison against one git reported.
+///
+/// Canonicalizing fails on a path that no longer exists; the raw value is the
+/// fallback, since nothing resolved can equal a path that isn't there anyway.
+pub(crate) fn real_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
 
 /// Safe Path -> &str conversion, replacing .to_str().unwrap()
 pub(crate) fn path_str(path: &Path) -> Result<&str> {
@@ -41,6 +49,13 @@ pub enum Error {
 
     #[error("worktree '{0}' has uncommitted changes, use --force")]
     WorktreeDirty(String),
+
+    #[error(
+        "'{path}' exists but git does not know it as a worktree \
+         (leftover from an earlier repository at this path?); \
+         run 'wt rm --force {branch}' to discard it"
+    )]
+    WorktreeStale { branch: String, path: String },
 
     #[error("branch '{0}' not found")]
     BranchNotFound(String),

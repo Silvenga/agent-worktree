@@ -60,15 +60,20 @@ pub fn has_uncommitted_changes() -> Result<bool> {
 /// Count uncommitted files in a specific worktree path
 ///
 /// Returns the number of lines from `git -C <path> status --porcelain`.
+///
+/// A failed status must not read as "clean": this count is the guard that
+/// stops `wt rm` from discarding work, and git fails here precisely when the
+/// worktree is broken — exactly when silently answering 0 is most dangerous.
 pub fn uncommitted_count_in(path: &Path) -> Result<usize> {
-    let output = Command::new("git")
-        .args(["-C", super::path_str(path)?, "status", "--porcelain"])
-        .output()?;
+    let stdout = super::run_output(&["-C", super::path_str(path)?, "status", "--porcelain"])
+        .map_err(|e| {
+            super::Error::Command(format!(
+                "cannot read git status in '{}': {e}",
+                path.display()
+            ))
+        })?;
 
-    let count = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .count();
+    let count = stdout.lines().filter(|l| !l.is_empty()).count();
 
     Ok(count)
 }
