@@ -198,6 +198,7 @@ post_merge = []
 > repo: leading `/` and `..` are rejected. Symlink entries are skipped
 > entirely. Copies use copy-on-write where the filesystem supports it, so even
 > `copy_files = ["node_modules"]` is near-free there.
+> File modification times are preserved.
 >
 > **Hook trust boundary** — hooks run via `sh -c` (or `cmd /C` on Windows)
 > with no sandboxing or timeout. Treat `.agent-worktree.toml` like any

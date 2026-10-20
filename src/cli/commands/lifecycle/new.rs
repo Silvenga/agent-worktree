@@ -247,8 +247,10 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 
 /// Copy `from` to `to` using copy-on-write (reflink/clonefile/DUPLICATE_EXTENTS)
 /// where the filesystem supports it, falling back to a plain content copy
-/// otherwise.
+/// otherwise. The source file's modification times are perserved.
 fn copy_file_reflink(from: &Path, to: &Path) -> std::io::Result<()> {
+    let modified = filetime::FileTime::from_last_modification_time(&std::fs::metadata(from)?);
+
     // Blind-remove instead of checking `to.exists()`: exists() follows
     // symlinks and reports false for a broken symlink, which would leave the
     // link in place and make the create_new inside reflink fail.
@@ -256,7 +258,21 @@ fn copy_file_reflink(from: &Path, to: &Path) -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         other => other?,
     }
-    reflink_copy::reflink_or_copy(from, to).map(|_| ())
+    reflink_copy::reflink_or_copy(from, to)?;
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+        // Timestamp updates must also work when the copied file is read-only.
+        let file = std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .open(to)?;
+        filetime::set_file_handle_times(&file, None, Some(modified))
+    }
+    #[cfg(not(windows))]
+    filetime::set_file_mtime(to, modified)
 }
 
 #[cfg(test)]
@@ -294,27 +310,86 @@ mod tests {
     }
 
     #[test]
-    fn copy_file_reflink_overwrites_existing_dest() {
+    fn when_copying_a_file_then_copy_file_reflink_should_preserve_modification_time_and_permissions(
+    ) {
+        for readonly in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src.txt");
+            let dest = dir.path().join("dest.txt");
+            std::fs::write(&src, "contents").unwrap();
+            filetime::set_file_mtime(
+                &src,
+                filetime::FileTime::from_unix_time(1_600_000_000, 123_456_700),
+            )
+            .unwrap();
+            let metadata = std::fs::metadata(&src).unwrap();
+            let modified = metadata.modified().unwrap();
+            if readonly {
+                let mut permissions = metadata.permissions();
+                permissions.set_readonly(true);
+                std::fs::set_permissions(&src, permissions).unwrap();
+            }
+
+            copy_file_reflink(&src, &dest).unwrap();
+
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "contents");
+            let copied_metadata = std::fs::metadata(&dest).unwrap();
+            assert_eq!(copied_metadata.modified().unwrap(), modified);
+            assert_eq!(copied_metadata.permissions().readonly(), readonly);
+            assert_eq!(
+                std::fs::metadata(&src).unwrap().modified().unwrap(),
+                modified
+            );
+        }
+    }
+
+    #[test]
+    fn when_destination_exists_then_copy_file_reflink_should_replace_contents_and_modification_time(
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src.txt");
         let dest = dir.path().join("dest.txt");
         std::fs::write(&src, "new").unwrap();
         std::fs::write(&dest, "stale").unwrap();
+        filetime::set_file_mtime(
+            &src,
+            filetime::FileTime::from_unix_time(1_600_000_000, 123_456_700),
+        )
+        .unwrap();
+        let modified = std::fs::metadata(&src).unwrap().modified().unwrap();
 
         copy_file_reflink(&src, &dest).unwrap();
+
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
+        assert_eq!(
+            std::fs::metadata(&dest).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[cfg(unix)]
     #[test]
-    fn copy_file_reflink_replaces_broken_symlink_dest() {
+    fn when_destination_is_a_broken_symlink_then_copy_file_reflink_should_replace_it_and_preserve_mtime(
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src.txt");
         let dest = dir.path().join("dest.txt");
         std::fs::write(&src, "new").unwrap();
         std::os::unix::fs::symlink(dir.path().join("missing"), &dest).unwrap();
+        filetime::set_file_mtime(
+            &src,
+            filetime::FileTime::from_unix_time(1_600_000_000, 123_456_700),
+        )
+        .unwrap();
+        let modified = std::fs::metadata(&src).unwrap().modified().unwrap();
 
         copy_file_reflink(&src, &dest).unwrap();
+
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new");
+        assert!(!std::fs::symlink_metadata(&dest).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::metadata(&dest).unwrap().modified().unwrap(),
+            modified
+        );
     }
 }
