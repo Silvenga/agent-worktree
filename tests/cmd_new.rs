@@ -204,7 +204,7 @@ fn test_full_worktree_lifecycle() {
 }
 
 #[test]
-fn when_files_match_copy_patterns_then_new_should_preserve_contents_and_modification_times() {
+fn test_new_copies_files_matching_copy_files_pattern() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     std::fs::write(repo.join(".env"), "SECRET=test\n").unwrap();
